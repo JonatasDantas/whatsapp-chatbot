@@ -3,11 +3,11 @@ import os
 
 import aws_cdk as cdk
 
-from chacara_chatbot.chacara_chatbot_stack import ChacaraChatbotStack
+from cdk.whatsapp_chatbot_stack import WhatsappChatbotStack
 
 
 app = cdk.App()
-ChacaraChatbotStack(app, "ChacaraChatbotStack",
+WhatsappChatbotStack(app, "WhatsappChatbotStack",
     # If you don't specify 'env', this stack will be environment-agnostic.
     # Account/Region-dependent features and context lookups will not work,
     # but a single synthesized template can be deployed anywhere.
