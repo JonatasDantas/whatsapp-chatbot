@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Optional
 
@@ -21,6 +21,7 @@ class LeadStatus(StrEnum):
 
 class Conversation(BaseModel):
     phone_number: str
+    name: Optional[str] = None
     stage: ConversationStage = ConversationStage.GREETING
     checkin: Optional[str] = None
     checkout: Optional[str] = None
@@ -31,5 +32,8 @@ class Conversation(BaseModel):
     price_estimate: Optional[float] = None
     lead_status: LeadStatus = LeadStatus.NEW
     owner_notified: bool = False
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def touch(self) -> None:
+        self.updated_at = datetime.now(timezone.utc)
