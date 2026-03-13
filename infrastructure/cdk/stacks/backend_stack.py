@@ -2,6 +2,7 @@ from aws_cdk import RemovalPolicy, Stack
 from aws_cdk import aws_apigateway as apigw
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_lambda as _lambda
+from aws_cdk import aws_ssm as ssm
 from constructs import Construct
 
 
@@ -13,8 +14,14 @@ class BackendStack(Stack):
         messages_table = self._create_messages_table()
         reservations_table = self._create_reservations_table()
 
+        verify_token_param = ssm.StringParameter.from_secure_string_parameter_attributes(
+            self,
+            "WhatsappVerifyTokenParam",
+            parameter_name="/chacara-chatbot/whatsapp-verify-token",
+        )
+
         webhook_function = self._create_webhook_function(
-            conversations_table, messages_table, reservations_table
+            conversations_table, messages_table, reservations_table, verify_token_param
         )
 
         self._create_api_gateway(webhook_function)
@@ -67,24 +74,33 @@ class BackendStack(Stack):
         conversations_table: dynamodb.Table,
         messages_table: dynamodb.Table,
         reservations_table: dynamodb.Table,
+        verify_token_param: ssm.IStringParameter,
     ) -> _lambda.Function:
+        powertools_layer = _lambda.LayerVersion.from_layer_version_arn(
+            self,
+            "PowertoolsLayer",
+            f"arn:aws:lambda:{self.region}:017000801446:layer:AWSLambdaPowertoolsPythonV3-python312-x86_64:7",
+        )
+
         function = _lambda.Function(
             self,
             "WebhookFunction",
             runtime=_lambda.Runtime.PYTHON_3_12,
-            handler="handler.handler",
-            code=_lambda.Code.from_asset("backend/lambdas/webhook"),
+            handler="lambdas.webhook.handler.handler",
+            code=_lambda.Code.from_asset("backend"),
+            layers=[powertools_layer],
             environment={
                 "CONVERSATIONS_TABLE": conversations_table.table_name,
                 "MESSAGES_TABLE": messages_table.table_name,
                 "RESERVATIONS_TABLE": reservations_table.table_name,
-                "WHATSAPP_VERIFY_TOKEN": "",
+                "WHATSAPP_VERIFY_TOKEN_PARAM": verify_token_param.parameter_name,
             },
         )
 
         conversations_table.grant_read_write_data(function)
         messages_table.grant_read_write_data(function)
         reservations_table.grant_read_write_data(function)
+        verify_token_param.grant_read(function)
 
         return function
 

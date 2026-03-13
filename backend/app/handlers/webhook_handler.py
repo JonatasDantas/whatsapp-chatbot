@@ -1,13 +1,26 @@
 import json
-import logging
+import os
 
-from aws_lambda_powertools.utilities.typing import LambdaContext
+import boto3
+from aws_lambda_powertools import Logger
 
-logger = logging.getLogger(__name__)
+logger = Logger(service="chacara-chatbot")
+
+ssm_client = boto3.client("ssm")
+_verify_token: str | None = None
+
+
+def _get_verify_token() -> str:
+    global _verify_token
+    if _verify_token is None:
+        param_name = os.environ.get("WHATSAPP_VERIFY_TOKEN_PARAM", "")
+        response = ssm_client.get_parameter(Name=param_name, WithDecryption=True)
+        _verify_token = response["Parameter"]["Value"]
+    return _verify_token
 
 
 class WebhookHandler:
-    def handle(self, event: dict, context: LambdaContext) -> dict:
+    def handle(self, event: dict, context) -> dict:
         http_method = event.get("httpMethod", "")
 
         if http_method == "GET":
@@ -24,7 +37,13 @@ class WebhookHandler:
         token = params.get("hub.verify_token")
         challenge = params.get("hub.challenge")
 
-        verify_token = self._get_verify_token()
+        logger.info("webhook_verification_request", extra={
+            "mode": mode,
+            "has_token": bool(token),
+            "has_challenge": bool(challenge),
+        })
+
+        verify_token = _get_verify_token()
 
         if mode == "subscribe" and token == verify_token:
             logger.info("webhook_verified")
@@ -37,8 +56,3 @@ class WebhookHandler:
         body = json.loads(event.get("body", "{}"))
         logger.info("webhook_received", extra={"body": body})
         return {"statusCode": 200, "body": json.dumps({"status": "received"})}
-
-    def _get_verify_token(self) -> str:
-        import os
-
-        return os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
