@@ -66,13 +66,11 @@ whatsapp-chatbot/
 │   │   │   ├── models/
 │   │   │   │   ├── conversation.py
 │   │   │   │   ├── message.py
-│   │   │   │   ├── lead.py
 │   │   │   │   └── reservation.py
 │   │   │   │
 │   │   │   └── repositories/
 │   │   │       ├── conversation_repository.py
 │   │   │       ├── message_repository.py
-│   │   │       ├── lead_repository.py
 │   │   │       └── calendar_repository.py
 │   │   │
 │   │   ├── use_cases/
