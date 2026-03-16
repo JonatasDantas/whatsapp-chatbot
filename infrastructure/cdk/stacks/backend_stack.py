@@ -82,6 +82,8 @@ class BackendStack(Stack):
         )
 
     def _create_settings_parameters(self) -> tuple:
+        # These two already exist in SSM as SecureString — managed manually, not created by CDK.
+        # They must exist before deploying, or the Lambda will fail at runtime.
         openai_key = ssm.StringParameter.from_secure_string_parameter_attributes(
             self,
             "OpenAiApiKeyParam",
@@ -114,8 +116,8 @@ class BackendStack(Stack):
         verify_token_param: ssm.IStringParameter,
         openai_key_param: ssm.IStringParameter,
         whatsapp_token_param: ssm.IStringParameter,
-        whatsapp_phone_param: ssm.StringParameter,
-        knowledge_base_param: ssm.StringParameter,
+        whatsapp_phone_param: ssm.IStringParameter,
+        knowledge_base_param: ssm.IStringParameter,
     ) -> _lambda.Function:
         powertools_layer = _lambda.LayerVersion.from_layer_version_arn(
             self,
