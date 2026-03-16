@@ -15,9 +15,13 @@ class ProcessIncomingMessage:
         self,
         conversation_repo: ConversationRepository,
         message_repo: MessageRepository,
+        whatsapp_client=None,
+        whisper_client=None,
     ) -> None:
         self._conversation_repo = conversation_repo
         self._message_repo = message_repo
+        self._whatsapp_client = whatsapp_client
+        self._whisper_client = whisper_client
 
     def execute(self, parsed_messages: list[ParsedMessage]) -> list[ParsedMessage]:
         for parsed in parsed_messages:
@@ -49,11 +53,20 @@ class ProcessIncomingMessage:
                 "stage": conversation.stage,
             })
 
+        content = parsed.content
+        if (
+            parsed.message_type == MessageType.AUDIO
+            and parsed.media_id
+            and self._whatsapp_client
+            and self._whisper_client
+        ):
+            content = self._transcribe_audio(parsed.media_id)
+
         message = Message(
             phone_number=parsed.phone_number,
             timestamp=datetime.fromtimestamp(int(parsed.timestamp), tz=timezone.utc),
             role=MessageRole.USER,
-            message=parsed.content,
+            message=content,
             message_type=MessageType(parsed.message_type),
             media_id=parsed.media_id,
         )
@@ -67,3 +80,11 @@ class ProcessIncomingMessage:
 
         conversation.touch()
         self._conversation_repo.save(conversation)
+
+    def _transcribe_audio(self, media_id: str) -> str:
+        logger.info("audio_transcription_started", media_id=media_id)
+        media_url = self._whatsapp_client.get_media_url(media_id)
+        audio_data = self._whatsapp_client.download_media(media_url)
+        transcript = self._whisper_client.transcribe(audio_data=audio_data)
+        logger.info("audio_transcription_completed", media_id=media_id)
+        return transcript

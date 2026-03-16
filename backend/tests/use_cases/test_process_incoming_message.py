@@ -1,4 +1,5 @@
 from typing import Optional
+from unittest.mock import MagicMock
 
 from app.domain.models.conversation import Conversation, ConversationStage
 from app.domain.models.message import Message, MessageType
@@ -112,3 +113,42 @@ def test_processes_multiple_messages():
     use_case.execute(messages)
 
     assert len(msg_repo.messages) == 2
+
+
+def test_transcribes_audio_message():
+    # Arrange
+    conv_repo = FakeConversationRepo()
+    msg_repo = FakeMessageRepo()
+    whatsapp_client = MagicMock()
+    whatsapp_client.get_media_url.return_value = "https://cdn.example.com/audio.ogg"
+    whatsapp_client.download_media.return_value = b"audio-bytes"
+    whisper_client = MagicMock()
+    whisper_client.transcribe.return_value = "Oi, quero reservar para o fim de semana"
+
+    from datetime import datetime, timezone
+    from app.integrations.whatsapp.message_parser import ParsedMessage
+    from app.domain.models.message import MessageType
+
+    parsed = ParsedMessage(
+        phone_number="+5511999999999",
+        contact_name="Test",
+        message_type=MessageType.AUDIO,
+        content="",
+        media_id="media-123",
+        whatsapp_message_id="waid-1",
+        timestamp=str(int(datetime.now(timezone.utc).timestamp())),
+    )
+
+    use_case = ProcessIncomingMessage(
+        conversation_repo=conv_repo,
+        message_repo=msg_repo,
+        whatsapp_client=whatsapp_client,
+        whisper_client=whisper_client,
+    )
+    use_case.execute([parsed])
+
+    assert len(msg_repo.messages) == 1
+    assert msg_repo.messages[0].message == "Oi, quero reservar para o fim de semana"
+    assert msg_repo.messages[0].message_type == MessageType.AUDIO
+    whatsapp_client.get_media_url.assert_called_once_with("media-123")
+    whisper_client.transcribe.assert_called_once_with(audio_data=b"audio-bytes")

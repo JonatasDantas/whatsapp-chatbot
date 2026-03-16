@@ -1,6 +1,9 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+import app.handlers.webhook_handler as handler_module
 from app.handlers.webhook_handler import WebhookHandler
 
 
@@ -11,7 +14,8 @@ def _make_post_event(body: dict) -> dict:
     }
 
 
-def _make_text_webhook_payload() -> dict:
+def _text_message_payload(phone: str, text: str) -> dict:
+    wa_id = phone.lstrip("+")
     return {
         "object": "whatsapp_business_account",
         "entry": [{"id": "BIZ_ID", "changes": [{"value": {
@@ -20,34 +24,63 @@ def _make_text_webhook_payload() -> dict:
                 "display_phone_number": "15550000000",
                 "phone_number_id": "123",
             },
-            "contacts": [{"profile": {"name": "Maria"}, "wa_id": "5511999999999"}],
+            "contacts": [{"profile": {"name": "Test"}, "wa_id": wa_id}],
             "messages": [{
-                "from": "5511999999999",
+                "from": wa_id,
                 "id": "wamid.test1",
                 "timestamp": "1710280800",
                 "type": "text",
-                "text": {"body": "Hello"},
+                "text": {"body": text},
             }],
         }, "field": "messages"}]}],
     }
 
 
-@patch("app.handlers.webhook_handler._get_messages_table")
-@patch("app.handlers.webhook_handler._get_conversations_table")
-def test_post_returns_200(mock_conv_table, mock_msg_table):
-    mock_conv_table.return_value = MagicMock()
-    mock_msg_table.return_value = MagicMock()
+def _make_text_webhook_payload() -> dict:
+    return _text_message_payload("+5511999999999", "Hello")
 
-    # Mock the DynamoDB table's get_item to return no existing conversation
-    mock_conv_table.return_value.get_item.return_value = {}
-    # Mock put_item to do nothing
-    mock_conv_table.return_value.put_item.return_value = {}
-    mock_msg_table.return_value.put_item.return_value = {}
 
-    handler = WebhookHandler()
-    event = _make_post_event(_make_text_webhook_payload())
-    response = handler.handle(event, None)
-    assert response["statusCode"] == 200
+def _reset_handler_globals():
+    handler_module._ssm = None
+
+
+@pytest.fixture(autouse=False)
+def mock_repos():
+    """Reset handler globals and mock repo/client factories."""
+    _reset_handler_globals()
+
+    mock_conv_repo = MagicMock()
+    mock_msg_repo = MagicMock()
+    mock_conv_repo.load.return_value = None
+    mock_msg_repo.get_recent.return_value = []
+
+    with patch("app.handlers.webhook_handler.get_conversation_repo", return_value=mock_conv_repo), \
+         patch("app.handlers.webhook_handler.get_message_repo", return_value=mock_msg_repo):
+        yield mock_conv_repo, mock_msg_repo
+
+    _reset_handler_globals()
+
+
+def _patch_all_integrations():
+    """Return a list of patches for all external integrations used in POST handling."""
+    return [
+        patch("app.handlers.webhook_handler.get_conversation_repo"),
+        patch("app.handlers.webhook_handler.get_message_repo"),
+        patch("app.handlers.webhook_handler.get_openai_client"),
+        patch("app.handlers.webhook_handler.get_whatsapp_client"),
+        patch("app.handlers.webhook_handler.get_whisper_client"),
+        patch("app.handlers.webhook_handler.PromptBuilder"),
+        patch("app.handlers.webhook_handler.GenerateAIResponse"),
+    ]
+
+
+def test_post_returns_200():
+    patches = _patch_all_integrations()
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6] as MockGenerate:
+        MockGenerate.return_value = MagicMock()
+        handler = WebhookHandler()
+        response = handler.handle(_make_post_event(_make_text_webhook_payload()), None)
+        assert response["statusCode"] == 200
 
 
 def test_post_status_only_returns_200():
@@ -61,17 +94,19 @@ def test_post_status_only_returns_200():
             ],
         }, "field": "messages"}]}],
     }
-    handler = WebhookHandler()
-    event = _make_post_event(payload)
-    response = handler.handle(event, None)
-    assert response["statusCode"] == 200
+    patches = _patch_all_integrations()
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        handler = WebhookHandler()
+        response = handler.handle(_make_post_event(payload), None)
+        assert response["statusCode"] == 200
 
 
 def test_post_invalid_payload_returns_200():
-    handler = WebhookHandler()
-    event = _make_post_event({"invalid": "payload"})
-    response = handler.handle(event, None)
-    assert response["statusCode"] == 200
+    patches = _patch_all_integrations()
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        handler = WebhookHandler()
+        response = handler.handle(_make_post_event({"invalid": "payload"}), None)
+        assert response["statusCode"] == 200
 
 
 def test_post_malformed_json_returns_200():
@@ -82,9 +117,7 @@ def test_post_malformed_json_returns_200():
 
 
 def test_get_valid_token_returns_200_with_challenge():
-    with patch(
-        "app.handlers.webhook_handler._get_verify_token", return_value="my-token"
-    ):
+    with patch("app.handlers.webhook_handler._get_verify_token", return_value="my-token"):
         handler = WebhookHandler()
         event = {
             "httpMethod": "GET",
@@ -100,9 +133,7 @@ def test_get_valid_token_returns_200_with_challenge():
 
 
 def test_get_invalid_token_returns_403():
-    with patch(
-        "app.handlers.webhook_handler._get_verify_token", return_value="my-token"
-    ):
+    with patch("app.handlers.webhook_handler._get_verify_token", return_value="my-token"):
         handler = WebhookHandler()
         event = {
             "httpMethod": "GET",
@@ -117,9 +148,7 @@ def test_get_invalid_token_returns_403():
 
 
 def test_get_missing_params_returns_403():
-    with patch(
-        "app.handlers.webhook_handler._get_verify_token", return_value="my-token"
-    ):
+    with patch("app.handlers.webhook_handler._get_verify_token", return_value="my-token"):
         handler = WebhookHandler()
         event = {
             "httpMethod": "GET",
@@ -127,3 +156,22 @@ def test_get_missing_params_returns_403():
         }
         response = handler.handle(event, None)
         assert response["statusCode"] == 403
+
+
+def test_post_calls_generate_ai_response(mock_repos):
+    with patch("app.handlers.webhook_handler.GenerateAIResponse") as MockGenerate, \
+         patch("app.handlers.webhook_handler.get_openai_client"), \
+         patch("app.handlers.webhook_handler.get_whatsapp_client"), \
+         patch("app.handlers.webhook_handler.get_whisper_client"), \
+         patch("app.handlers.webhook_handler.PromptBuilder"):
+        mock_instance = MagicMock()
+        MockGenerate.return_value = mock_instance
+
+        handler = WebhookHandler()
+        event = {
+            "httpMethod": "POST",
+            "body": json.dumps(_text_message_payload("+5511999999999", "Oi")),
+        }
+        response = handler.handle(event, {})
+        assert response["statusCode"] == 200
+        mock_instance.execute.assert_called_once_with(phone_number="+5511999999999")

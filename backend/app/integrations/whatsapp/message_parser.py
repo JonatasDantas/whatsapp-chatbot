@@ -1,6 +1,9 @@
 from typing import Optional
 
+from aws_lambda_powertools import Logger
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = Logger()
 
 
 class ParsedMessage(BaseModel):
@@ -82,9 +85,11 @@ class MessageParser:
         try:
             webhook = WhatsAppWebhook.model_validate(payload)
         except Exception:
+            logger.warning("webhook_parse_failed")
             return []
 
         if webhook.object != "whatsapp_business_account":
+            logger.warning("unexpected_webhook_object", object=webhook.object)
             return []
 
         parsed: list[ParsedMessage] = []
@@ -94,6 +99,8 @@ class MessageParser:
                 value = change.value
 
                 if not value.messages:
+                    if value.statuses:
+                        logger.info("webhook_status_update_skipped", count=len(value.statuses))
                     continue
 
                 contacts_map: dict[str, str] = {}
@@ -117,7 +124,9 @@ class MessageParser:
                         content = f"[unsupported: {msg.type}]"
                         media_id = None
                         message_type = "unsupported"
+                        logger.warning("unsupported_message_type", type=msg.type, phone=phone)
 
+                    logger.info("message_parsed", phone=phone, message_type=message_type)
                     parsed.append(ParsedMessage(
                         phone_number=phone,
                         contact_name=contact_name,
