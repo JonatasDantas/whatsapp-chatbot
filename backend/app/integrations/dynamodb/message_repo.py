@@ -44,3 +44,11 @@ class DynamoDBMessageRepository(MessageRepository):
         )
         items = response.get("Items", [])
         return [Message.model_validate(item) for item in items]
+
+    def get_all(self, phone_number: str) -> list[Message]:
+        response = self._table.query(
+            KeyConditionExpression=Key("phone_number").eq(phone_number),
+            ScanIndexForward=True,
+        )
+        items = response.get("Items", [])
+        return [Message.model_validate(item) for item in items]

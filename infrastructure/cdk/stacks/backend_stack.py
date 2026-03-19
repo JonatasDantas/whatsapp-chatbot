@@ -38,6 +38,10 @@ class BackendStack(Stack):
 
         self._create_api_gateway(webhook_function)
 
+        self.conversations_table = conversations_table
+        self.messages_table = messages_table
+        self.reservations_table = reservations_table
+
     def _create_conversations_table(self) -> dynamodb.Table:
         return dynamodb.Table(
             self,

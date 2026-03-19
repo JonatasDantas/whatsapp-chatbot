@@ -41,3 +41,9 @@ class DynamoDBConversationRepository(ConversationRepository):
     def save(self, conversation: Conversation) -> None:
         item = conversation.model_dump(mode="json")
         self._table.put_item(Item=item)
+
+    def list_all(self) -> list[Conversation]:
+        response = self._table.scan()
+        items = response.get("Items", [])
+        conversations = [Conversation.model_validate(item) for item in items]
+        return sorted(conversations, key=lambda c: c.updated_at, reverse=True)
