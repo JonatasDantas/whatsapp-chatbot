@@ -8,6 +8,7 @@ from app.domain.models.conversation import ConversationStage
 from app.domain.repositories.conversation_repository import ConversationRepository
 from app.domain.repositories.message_repository import MessageRepository
 from app.domain.repositories.reservation_repository import ReservationRepository
+from app.integrations.dynamodb.calendar_repo import DynamoDBCalendarRepository
 from app.integrations.whatsapp.whatsapp_client import WhatsAppClient
 
 logger = Logger()
@@ -45,11 +46,13 @@ class AdminHandler:
         message_repo: MessageRepository,
         reservation_repo: ReservationRepository,
         whatsapp_client: WhatsAppClient,
+        calendar_repo: DynamoDBCalendarRepository | None = None,
     ) -> None:
         self._conv_repo = conversation_repo
         self._msg_repo = message_repo
         self._res_repo = reservation_repo
         self._whatsapp = whatsapp_client
+        self._calendar_repo = calendar_repo
 
     def handle(self, event: dict) -> dict:
         method = event.get("httpMethod", "GET")
@@ -78,6 +81,17 @@ class AdminHandler:
 
         if resource == "/api/reservations" and method == "GET":
             return self._list_reservations()
+
+        if resource == "/api/blocked-periods" and method == "GET":
+            return self._list_blocked_periods()
+
+        if resource == "/api/blocked-periods" and method == "POST":
+            body = json.loads(event.get("body") or "{}")
+            return self._add_blocked_period(body)
+
+        if resource == "/api/blocked-periods/{period_id}" and method == "DELETE":
+            period_id = unquote(params.get("period_id", ""))
+            return self._delete_blocked_period(period_id)
 
         return _not_found()
 
@@ -112,3 +126,29 @@ class AdminHandler:
     def _list_reservations(self) -> dict:
         reservations = self._res_repo.list_all()
         return _ok({"reservations": [r.model_dump(mode="json") for r in reservations]})
+
+    def _list_blocked_periods(self) -> dict:
+        if not self._calendar_repo:
+            return _error("Calendar not configured", 503)
+        return _ok({"blocked_periods": self._calendar_repo.list_all()})
+
+    def _add_blocked_period(self, body: dict) -> dict:
+        if not self._calendar_repo:
+            return _error("Calendar not configured", 503)
+        start_date = body.get("start_date", "")
+        end_date = body.get("end_date", "")
+        if not start_date or not end_date:
+            return _error("start_date and end_date are required", 400)
+        reason = body.get("reason", "")
+        period = self._calendar_repo.add_period(start_date, end_date, reason)
+        return _ok({"blocked_period": period})
+
+    def _delete_blocked_period(self, period_id: str) -> dict:
+        if not self._calendar_repo:
+            return _error("Calendar not configured", 503)
+        if not period_id:
+            return _error("period_id is required", 400)
+        found = self._calendar_repo.delete_period(period_id)
+        if not found:
+            return _not_found(f"Blocked period not found: {period_id}")
+        return _ok({"deleted": True})

@@ -42,6 +42,8 @@ def _make_text_webhook_payload() -> dict:
 
 def _reset_handler_globals():
     handler_module._ssm = None
+    handler_module._availability_service = None
+    handler_module._pricing_service = None
 
 
 @pytest.fixture(autouse=False)
@@ -71,12 +73,16 @@ def _patch_all_integrations():
         patch("app.handlers.webhook_handler.get_whisper_client"),
         patch("app.handlers.webhook_handler.PromptBuilder"),
         patch("app.handlers.webhook_handler.GenerateAIResponse"),
+        patch("app.handlers.webhook_handler._get_settings"),
+        patch("app.handlers.webhook_handler._get_availability_service"),
+        patch("app.handlers.webhook_handler._get_pricing_service"),
     ]
 
 
 def test_post_returns_200():
     patches = _patch_all_integrations()
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6] as MockGenerate:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], \
+         patches[5], patches[6] as MockGenerate, patches[7], patches[8], patches[9]:
         MockGenerate.return_value = MagicMock()
         handler = WebhookHandler()
         response = handler.handle(_make_post_event(_make_text_webhook_payload()), None)
@@ -95,7 +101,8 @@ def test_post_status_only_returns_200():
         }, "field": "messages"}]}],
     }
     patches = _patch_all_integrations()
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], \
+         patches[5], patches[6], patches[7], patches[8], patches[9]:
         handler = WebhookHandler()
         response = handler.handle(_make_post_event(payload), None)
         assert response["statusCode"] == 200
@@ -103,7 +110,8 @@ def test_post_status_only_returns_200():
 
 def test_post_invalid_payload_returns_200():
     patches = _patch_all_integrations()
-    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+    with patches[0], patches[1], patches[2], patches[3], patches[4], \
+         patches[5], patches[6], patches[7], patches[8], patches[9]:
         handler = WebhookHandler()
         response = handler.handle(_make_post_event({"invalid": "payload"}), None)
         assert response["statusCode"] == 200
@@ -163,7 +171,10 @@ def test_post_calls_generate_ai_response(mock_repos):
          patch("app.handlers.webhook_handler.get_openai_client"), \
          patch("app.handlers.webhook_handler.get_whatsapp_client"), \
          patch("app.handlers.webhook_handler.get_whisper_client"), \
-         patch("app.handlers.webhook_handler.PromptBuilder"):
+         patch("app.handlers.webhook_handler.PromptBuilder"), \
+         patch("app.handlers.webhook_handler._get_settings"), \
+         patch("app.handlers.webhook_handler._get_availability_service"), \
+         patch("app.handlers.webhook_handler._get_pricing_service"):
         mock_instance = MagicMock()
         MockGenerate.return_value = mock_instance
 

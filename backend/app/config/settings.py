@@ -8,6 +8,7 @@ _settings = None
 class Settings:
     def __init__(self):
         self.openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        self.owner_phone: str = ""
 
         param_names = {
             attr: os.environ[env_var]
@@ -16,6 +17,7 @@ class Settings:
                 "whatsapp_access_token": "WHATSAPP_ACCESS_TOKEN_PARAM",
                 "whatsapp_phone_number_id": "WHATSAPP_PHONE_NUMBER_ID_PARAM",
                 "knowledge_base_bucket": "KNOWLEDGE_BASE_BUCKET_PARAM",
+                "owner_phone": "OWNER_PHONE_PARAM",
             }.items()
             if env_var in os.environ
         }

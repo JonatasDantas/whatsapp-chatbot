@@ -21,19 +21,27 @@ class BackendStack(Stack):
             parameter_name="/chacara-chatbot/whatsapp-verify-token",
         )
 
-        openai_key_param, whatsapp_token_param, whatsapp_phone_param, knowledge_base_param = (
-            self._create_settings_parameters()
-        )
+        blocked_periods_table = self._create_blocked_periods_table()
+
+        (
+            openai_key_param,
+            whatsapp_token_param,
+            whatsapp_phone_param,
+            knowledge_base_param,
+            owner_phone_param,
+        ) = self._create_settings_parameters()
 
         webhook_function = self._create_webhook_function(
             conversations_table,
             messages_table,
             reservations_table,
+            blocked_periods_table,
             verify_token_param,
             openai_key_param,
             whatsapp_token_param,
             whatsapp_phone_param,
             knowledge_base_param,
+            owner_phone_param,
         )
 
         self._create_api_gateway(webhook_function)
@@ -41,6 +49,7 @@ class BackendStack(Stack):
         self.conversations_table = conversations_table
         self.messages_table = messages_table
         self.reservations_table = reservations_table
+        self.blocked_periods_table = blocked_periods_table
 
     def _create_conversations_table(self) -> dynamodb.Table:
         return dynamodb.Table(
@@ -66,6 +75,19 @@ class BackendStack(Stack):
             ),
             sort_key=dynamodb.Attribute(
                 name="timestamp",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+    def _create_blocked_periods_table(self) -> dynamodb.Table:
+        return dynamodb.Table(
+            self,
+            "BlockedPeriodsTable",
+            table_name="BlockedPeriods",
+            partition_key=dynamodb.Attribute(
+                name="period_id",
                 type=dynamodb.AttributeType.STRING,
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -110,18 +132,27 @@ class BackendStack(Stack):
             parameter_name="/chacara-chatbot/knowledge-base-bucket",
             string_value="REPLACE_ME",
         )
-        return openai_key, whatsapp_token, whatsapp_phone, knowledge_base
+        owner_phone = ssm.StringParameter(
+            self,
+            "OwnerPhoneParam",
+            parameter_name="/chacara-chatbot/owner-phone",
+            string_value="REPLACE_ME",
+            description="Owner's WhatsApp phone number for lead notifications (e.g. +5511999999999)",
+        )
+        return openai_key, whatsapp_token, whatsapp_phone, knowledge_base, owner_phone
 
     def _create_webhook_function(
         self,
         conversations_table: dynamodb.Table,
         messages_table: dynamodb.Table,
         reservations_table: dynamodb.Table,
+        blocked_periods_table: dynamodb.Table,
         verify_token_param: ssm.IStringParameter,
         openai_key_param: ssm.IStringParameter,
         whatsapp_token_param: ssm.IStringParameter,
         whatsapp_phone_param: ssm.IStringParameter,
         knowledge_base_param: ssm.IStringParameter,
+        owner_phone_param: ssm.IStringParameter,
     ) -> _lambda.Function:
         powertools_layer = _lambda.LayerVersion.from_layer_version_arn(
             self,
@@ -140,17 +171,21 @@ class BackendStack(Stack):
                 "CONVERSATIONS_TABLE": conversations_table.table_name,
                 "MESSAGES_TABLE": messages_table.table_name,
                 "RESERVATIONS_TABLE": reservations_table.table_name,
+                "BLOCKED_PERIODS_TABLE": blocked_periods_table.table_name,
                 "WHATSAPP_VERIFY_TOKEN_PARAM": verify_token_param.parameter_name,
                 "OPENAI_API_KEY_PARAM": openai_key_param.parameter_name,
                 "WHATSAPP_ACCESS_TOKEN_PARAM": whatsapp_token_param.parameter_name,
                 "WHATSAPP_PHONE_NUMBER_ID_PARAM": whatsapp_phone_param.parameter_name,
                 "KNOWLEDGE_BASE_BUCKET_PARAM": knowledge_base_param.parameter_name,
+                "OWNER_PHONE_PARAM": owner_phone_param.parameter_name,
+                "NIGHTLY_RATE": "800.0",
             },
         )
 
         conversations_table.grant_read_write_data(function)
         messages_table.grant_read_write_data(function)
         reservations_table.grant_read_write_data(function)
+        blocked_periods_table.grant_read_write_data(function)
         verify_token_param.grant_read(function)
 
         # ssm:GetParameters (plural) for the batched get_parameters() call in Settings
@@ -162,6 +197,7 @@ class BackendStack(Stack):
                     whatsapp_token_param.parameter_arn,
                     whatsapp_phone_param.parameter_arn,
                     knowledge_base_param.parameter_arn,
+                    owner_phone_param.parameter_arn,
                 ],
             )
         )
