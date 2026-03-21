@@ -5,6 +5,7 @@ import boto3
 
 from app.domain.models.reservation import Reservation
 from app.domain.repositories.reservation_repository import ReservationRepository
+from app.utils.dynamodb import to_dynamodb_item
 
 _dynamodb = None
 _table = None
@@ -32,7 +33,7 @@ class DynamoDBReservationRepository(ReservationRepository):
         self._table = table
 
     def save(self, reservation: Reservation) -> None:
-        item = reservation.model_dump(mode="json")
+        item = to_dynamodb_item(reservation.model_dump(mode="json"))
         self._table.put_item(Item=item)
 
     def get(self, reservation_id: str) -> Reservation | None:

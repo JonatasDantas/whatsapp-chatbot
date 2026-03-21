@@ -130,3 +130,102 @@ def test_takeover_not_found_returns_404():
                    path_params={"phone": "unknown"})
     result = handler.handle(event)
     assert result["statusCode"] == 404
+
+
+# --- Blocked Periods endpoints ---
+
+def _make_calendar_repo():
+    cal_repo = MagicMock()
+    cal_repo.list_all.return_value = [
+        {"period_id": "abc", "start_date": "2026-04-10", "end_date": "2026-04-12", "reason": "booked"}
+    ]
+    cal_repo.add_period.return_value = {
+        "period_id": "new-id", "start_date": "2026-05-01", "end_date": "2026-05-03", "reason": ""
+    }
+    cal_repo.delete_period.return_value = True
+    return cal_repo
+
+
+def test_list_blocked_periods_returns_200():
+    cal_repo = _make_calendar_repo()
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock(), calendar_repo=cal_repo)
+    event = _event("GET", "/api/blocked-periods")
+    result = handler.handle(event)
+
+    assert result["statusCode"] == 200
+    body = json.loads(result["body"])
+    assert len(body["blocked_periods"]) == 1
+    assert body["blocked_periods"][0]["period_id"] == "abc"
+
+
+def test_list_blocked_periods_without_repo_returns_503():
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    event = _event("GET", "/api/blocked-periods")
+    result = handler.handle(event)
+    assert result["statusCode"] == 503
+
+
+def test_add_blocked_period_returns_200():
+    cal_repo = _make_calendar_repo()
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock(), calendar_repo=cal_repo)
+    event = _event("POST", "/api/blocked-periods", body={"start_date": "2026-05-01", "end_date": "2026-05-03"})
+    result = handler.handle(event)
+
+    assert result["statusCode"] == 200
+    body = json.loads(result["body"])
+    assert body["blocked_period"]["period_id"] == "new-id"
+    cal_repo.add_period.assert_called_once_with("2026-05-01", "2026-05-03", "")
+
+
+def test_add_blocked_period_missing_dates_returns_400():
+    cal_repo = _make_calendar_repo()
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock(), calendar_repo=cal_repo)
+    event = _event("POST", "/api/blocked-periods", body={"start_date": "2026-05-01"})
+    result = handler.handle(event)
+    assert result["statusCode"] == 400
+
+
+def test_delete_blocked_period_returns_200():
+    cal_repo = _make_calendar_repo()
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock(), calendar_repo=cal_repo)
+    event = _event("DELETE", "/api/blocked-periods/{period_id}", path_params={"period_id": "abc"})
+    result = handler.handle(event)
+
+    assert result["statusCode"] == 200
+    cal_repo.delete_period.assert_called_once_with("abc")
+
+
+def test_delete_nonexistent_blocked_period_returns_404():
+    cal_repo = _make_calendar_repo()
+    cal_repo.delete_period.return_value = False
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock(), calendar_repo=cal_repo)
+    event = _event("DELETE", "/api/blocked-periods/{period_id}", path_params={"period_id": "xyz"})
+    result = handler.handle(event)
+    assert result["statusCode"] == 404
+
+
+def test_options_returns_200():
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    event = _event("OPTIONS", "/api/conversations")
+    result = handler.handle(event)
+    assert result["statusCode"] == 200
+
+
+def test_get_single_conversation_returns_200():
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = _make_conversation()
+    handler = AdminHandler(conv_repo, MagicMock(), MagicMock(), MagicMock())
+    event = _event("GET", "/api/conversations/{phone}", path_params={"phone": "%2B5511999999999"})
+    result = handler.handle(event)
+    assert result["statusCode"] == 200
+    body = json.loads(result["body"])
+    assert body["conversation"]["phone_number"] == "+5511999999999"
+
+
+def test_get_single_conversation_not_found_returns_404():
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = None
+    handler = AdminHandler(conv_repo, MagicMock(), MagicMock(), MagicMock())
+    event = _event("GET", "/api/conversations/{phone}", path_params={"phone": "unknown"})
+    result = handler.handle(event)
+    assert result["statusCode"] == 404

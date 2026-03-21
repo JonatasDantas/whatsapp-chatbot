@@ -19,8 +19,6 @@ from app.use_cases.generate_ai_response import GenerateAIResponse
 from app.use_cases.notify_owner import NotifyOwner
 from app.use_cases.process_incoming_message import ProcessIncomingMessage
 
-_NIGHTLY_RATE = float(os.environ.get("NIGHTLY_RATE", "800.0"))
-
 _availability_service = None
 _pricing_service = None
 
@@ -35,7 +33,8 @@ def _get_availability_service() -> AvailabilityService:
 def _get_pricing_service() -> PricingService:
     global _pricing_service
     if _pricing_service is None:
-        _pricing_service = PricingService(nightly_rate=_NIGHTLY_RATE)
+        nightly_rate = float(os.environ.get("NIGHTLY_RATE", "800.0"))
+        _pricing_service = PricingService(nightly_rate=nightly_rate)
     return _pricing_service
 
 logger = Logger()
@@ -51,9 +50,8 @@ def _get_ssm():
 
 
 def _get_verify_token() -> str:
-    param = _get_ssm().get_parameter(
-        Name="/chacara-chatbot/whatsapp/verify-token", WithDecryption=True
-    )
+    param_name = os.environ.get("WHATSAPP_VERIFY_TOKEN_PARAM", "/chacara-chatbot/whatsapp-verify-token")
+    param = _get_ssm().get_parameter(Name=param_name, WithDecryption=True)
     return param["Parameter"]["Value"]
 
 

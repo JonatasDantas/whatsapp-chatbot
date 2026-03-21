@@ -50,3 +50,34 @@ def test_list_all_returns_sorted_by_checkin():
     assert len(results) == 2
     assert results[0].checkin == "2026-04-10"
     assert results[1].checkin == "2026-05-01"
+
+
+def test_get_returns_reservation_by_id():
+    table = MagicMock()
+    table.get_item.return_value = {
+        "Item": {
+            "reservation_id": "res_001",
+            "phone_number": "+5511999999999",
+            "guest_name": "Ana Lima",
+            "checkin": "2026-04-10",
+            "checkout": "2026-04-12",
+            "guests": 4,
+            "price": 1200.0,
+            "status": "confirmed",
+            "created_at": "2026-03-01T00:00:00",
+        }
+    }
+    repo = DynamoDBReservationRepository(table)
+    result = repo.get("res_001")
+    assert result is not None
+    assert result.reservation_id == "res_001"
+    assert result.guest_name == "Ana Lima"
+    table.get_item.assert_called_once_with(Key={"reservation_id": "res_001"})
+
+
+def test_get_returns_none_when_not_found():
+    table = MagicMock()
+    table.get_item.return_value = {}
+    repo = DynamoDBReservationRepository(table)
+    result = repo.get("missing_id")
+    assert result is None

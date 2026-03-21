@@ -17,6 +17,7 @@ class AdminApiConstruct(Construct):
         conversations_table: dynamodb.Table,
         messages_table: dynamodb.Table,
         reservations_table: dynamodb.Table,
+        blocked_periods_table: dynamodb.Table,
         whatsapp_token_param: ssm.IStringParameter,
         whatsapp_phone_param: ssm.IStringParameter,
         user_pool: cognito.UserPool,
@@ -41,6 +42,7 @@ class AdminApiConstruct(Construct):
                 "CONVERSATIONS_TABLE": conversations_table.table_name,
                 "MESSAGES_TABLE": messages_table.table_name,
                 "RESERVATIONS_TABLE": reservations_table.table_name,
+                "BLOCKED_PERIODS_TABLE": blocked_periods_table.table_name,
                 "WHATSAPP_ACCESS_TOKEN_PARAM": whatsapp_token_param.parameter_name,
                 "WHATSAPP_PHONE_NUMBER_ID_PARAM": whatsapp_phone_param.parameter_name,
                 "ALLOWED_ORIGIN": "*",  # Update post-deploy to CloudFront URL for security
@@ -50,6 +52,7 @@ class AdminApiConstruct(Construct):
         conversations_table.grant_read_write_data(function)
         messages_table.grant_read_data(function)
         reservations_table.grant_read_data(function)
+        blocked_periods_table.grant_read_write_data(function)
 
         function.add_to_role_policy(
             iam.PolicyStatement(
@@ -126,6 +129,30 @@ class AdminApiConstruct(Construct):
         reservations = api_root.add_resource("reservations")
         reservations.add_method(
             "GET",
+            apigw.LambdaIntegration(function),
+            authorization_type=apigw.AuthorizationType.COGNITO,
+            authorizer=authorizer,
+        )
+
+        # /api/blocked-periods
+        blocked_periods = api_root.add_resource("blocked-periods")
+        blocked_periods.add_method(
+            "GET",
+            apigw.LambdaIntegration(function),
+            authorization_type=apigw.AuthorizationType.COGNITO,
+            authorizer=authorizer,
+        )
+        blocked_periods.add_method(
+            "POST",
+            apigw.LambdaIntegration(function),
+            authorization_type=apigw.AuthorizationType.COGNITO,
+            authorizer=authorizer,
+        )
+
+        # /api/blocked-periods/{period_id}
+        blocked_period_item = blocked_periods.add_resource("{period_id}")
+        blocked_period_item.add_method(
+            "DELETE",
             apigw.LambdaIntegration(function),
             authorization_type=apigw.AuthorizationType.COGNITO,
             authorizer=authorizer,

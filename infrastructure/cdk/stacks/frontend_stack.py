@@ -61,6 +61,7 @@ class FrontendStack(Stack):
             conversations_table=backend.conversations_table,
             messages_table=backend.messages_table,
             reservations_table=backend.reservations_table,
+            blocked_periods_table=backend.blocked_periods_table,
             whatsapp_token_param=whatsapp_token_param,
             whatsapp_phone_param=whatsapp_phone_param,
             user_pool=user_pool,

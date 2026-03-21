@@ -1,4 +1,4 @@
-from aws_cdk import RemovalPolicy, Stack
+from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_apigateway as apigw
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_iam as iam
@@ -167,6 +167,7 @@ class BackendStack(Stack):
             handler="lambdas.webhook.handler.handler",
             code=_lambda.Code.from_asset("backend"),
             layers=[powertools_layer],
+            timeout=Duration.seconds(60),
             environment={
                 "CONVERSATIONS_TABLE": conversations_table.table_name,
                 "MESSAGES_TABLE": messages_table.table_name,
@@ -206,6 +207,14 @@ class BackendStack(Stack):
             iam.PolicyStatement(
                 actions=["kms:Decrypt"],
                 resources=[f"arn:aws:kms:{self.region}:{self.account}:alias/aws/ssm"],
+            )
+        )
+
+        # S3 read access for the knowledge base bucket (fetched at runtime via SSM)
+        function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetObject"],
+                resources=["arn:aws:s3:::*/*"],
             )
         )
 

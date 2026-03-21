@@ -5,6 +5,7 @@ import boto3
 
 from app.domain.models.conversation import Conversation
 from app.domain.repositories.conversation_repository import ConversationRepository
+from app.utils.dynamodb import to_dynamodb_item
 
 _dynamodb = None
 _table = None
@@ -39,7 +40,7 @@ class DynamoDBConversationRepository(ConversationRepository):
         return Conversation.model_validate(item)
 
     def save(self, conversation: Conversation) -> None:
-        item = conversation.model_dump(mode="json")
+        item = to_dynamodb_item(conversation.model_dump(mode="json"))
         self._table.put_item(Item=item)
 
     def list_all(self) -> list[Conversation]:

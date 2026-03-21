@@ -166,6 +166,25 @@ def test_get_missing_params_returns_403():
         assert response["statusCode"] == 403
 
 
+def test_verify_token_reads_from_env_var(monkeypatch):
+    """_get_verify_token uses WHATSAPP_VERIFY_TOKEN_PARAM env var for SSM path."""
+    monkeypatch.setenv("WHATSAPP_VERIFY_TOKEN_PARAM", "/custom/verify-token-path")
+    mock_ssm = MagicMock()
+    mock_ssm.get_parameter.return_value = {"Parameter": {"Value": "expected-token"}}
+
+    import app.handlers.webhook_handler as wh_mod
+    wh_mod._ssm = mock_ssm
+
+    from app.handlers.webhook_handler import _get_verify_token
+    token = _get_verify_token()
+
+    assert token == "expected-token"
+    mock_ssm.get_parameter.assert_called_once_with(
+        Name="/custom/verify-token-path", WithDecryption=True
+    )
+    wh_mod._ssm = None
+
+
 def test_post_calls_generate_ai_response(mock_repos):
     with patch("app.handlers.webhook_handler.GenerateAIResponse") as MockGenerate, \
          patch("app.handlers.webhook_handler.get_openai_client"), \

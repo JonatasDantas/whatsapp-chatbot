@@ -51,7 +51,8 @@ class GenerateAIResponse:
         self._enrich_conversation(conversation)
 
         recent_messages = self._message_repo.get_recent(phone_number, limit=10)
-        system_prompt = self._prompt_builder.build_system_prompt(conversation)
+        extra_context = self._build_extra_context(conversation)
+        system_prompt = self._prompt_builder.build_system_prompt(conversation, extra_context=extra_context)
         messages = self._prompt_builder.build_messages(recent_messages)
 
         logger.info("llm_request_started", phone=phone_number, stage=conversation.stage, recent_messages_count=len(recent_messages))
@@ -74,7 +75,7 @@ class GenerateAIResponse:
             message_type=MessageType.TEXT,
         )
         self._message_repo.save(assistant_message)
-        self._whatsapp_client.send_text(to=phone_number, text=response_text)
+        # self._whatsapp_client.send_text(to=phone_number, text=response_text)
         logger.info("ai_response_sent", phone=phone_number)
 
         if (
@@ -86,6 +87,22 @@ class GenerateAIResponse:
                 self._notify_owner.execute(phone_number=phone_number)
             except Exception:
                 logger.exception("failed_to_notify_owner", phone=phone_number)
+
+    def _build_extra_context(self, conversation: Conversation) -> dict | None:
+        if (
+            self._availability_service
+            and conversation.checkin
+            and conversation.checkout
+        ):
+            try:
+                available = self._availability_service.check(
+                    checkin=conversation.checkin,
+                    checkout=conversation.checkout,
+                )
+                return {"dates_available": available}
+            except Exception:
+                logger.exception("availability_check_failed")
+        return None
 
     def _enrich_conversation(self, conversation: Conversation) -> None:
         if (
