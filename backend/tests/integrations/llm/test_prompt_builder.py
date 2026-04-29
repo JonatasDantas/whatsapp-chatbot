@@ -59,3 +59,22 @@ def test_build_messages_formats_roles():
     result = builder.build_messages(msgs)
     assert result[0] == {"role": "user", "content": "Oi"}
     assert result[1] == {"role": "assistant", "content": "Olá!"}
+
+
+def test_system_prompt_includes_extra_context():
+    builder = PromptBuilder()
+    conv = Conversation(
+        phone_number="+5511999999999",
+        checkin="2026-04-10",
+        checkout="2026-04-12",
+    )
+    prompt = builder.build_system_prompt(conv, extra_context={"dates_available": True})
+    assert "dates_available" in prompt
+    assert "true" in prompt.lower()
+
+
+def test_system_prompt_extra_context_none_does_not_crash():
+    builder = PromptBuilder()
+    conv = Conversation(phone_number="+5511999999999")
+    prompt = builder.build_system_prompt(conv, extra_context=None)
+    assert "Current Conversation State" in prompt

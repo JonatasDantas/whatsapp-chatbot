@@ -66,3 +66,34 @@ def test_get_recent_empty(dynamodb_table):
     repo = DynamoDBMessageRepository(dynamodb_table)
     recent = repo.get_recent("+5511000000000")
     assert recent == []
+
+
+def test_get_all_returns_chronological_order(dynamodb_table):
+    from datetime import datetime, timezone
+
+    repo = DynamoDBMessageRepository(dynamodb_table)
+
+    timestamps = [
+        datetime(2026, 3, 12, 21, 0, 2, tzinfo=timezone.utc),
+        datetime(2026, 3, 12, 21, 0, 0, tzinfo=timezone.utc),
+        datetime(2026, 3, 12, 21, 0, 1, tzinfo=timezone.utc),
+    ]
+    for ts in timestamps:
+        repo.save(Message(
+            phone_number="+5511999999999",
+            timestamp=ts,
+            role=MessageRole.USER,
+            message=f"msg-{ts.second}",
+            message_type=MessageType.TEXT,
+        ))
+
+    all_msgs = repo.get_all("+5511999999999")
+    assert len(all_msgs) == 3
+    assert all_msgs[0].message == "msg-0"
+    assert all_msgs[1].message == "msg-1"
+    assert all_msgs[2].message == "msg-2"
+
+
+def test_get_all_empty(dynamodb_table):
+    repo = DynamoDBMessageRepository(dynamodb_table)
+    assert repo.get_all("+5511000000000") == []

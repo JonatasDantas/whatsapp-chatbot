@@ -30,6 +30,9 @@ class FakeMessageRepo(MessageRepository):
     def get_recent(self, phone_number: str, limit: int = 10) -> list[Message]:
         return [m for m in self.messages if m.phone_number == phone_number][:limit]
 
+    def get_all(self, phone_number: str) -> list[Message]:
+        return [m for m in self.messages if m.phone_number == phone_number]
+
 
 def _make_parsed_message(**overrides) -> ParsedMessage:
     defaults = {
@@ -113,6 +116,42 @@ def test_processes_multiple_messages():
     use_case.execute(messages)
 
     assert len(msg_repo.messages) == 2
+
+
+def test_empty_message_list_does_nothing():
+    conv_repo = FakeConversationRepo()
+    msg_repo = FakeMessageRepo()
+    use_case = ProcessIncomingMessage(conv_repo, msg_repo)
+    result = use_case.execute([])
+    assert result == []
+    assert len(msg_repo.messages) == 0
+
+
+def test_error_in_one_message_does_not_stop_others():
+    """If one message fails processing, remaining messages are still processed."""
+    conv_repo = FakeConversationRepo()
+    msg_repo = FakeMessageRepo()
+
+    # Use a repo that raises on the first save but works after
+    call_count = {"n": 0}
+    original_save = conv_repo.save
+    def save_with_error(conv):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("simulated failure")
+        original_save(conv)
+    conv_repo.save = save_with_error
+
+    messages = [
+        _make_parsed_message(phone_number="+5511111111111", whatsapp_message_id="wamid.1"),
+        _make_parsed_message(phone_number="+5511222222222", whatsapp_message_id="wamid.2"),
+    ]
+    # Should not raise
+    use_case = ProcessIncomingMessage(conv_repo, msg_repo)
+    use_case.execute(messages)
+
+    # Second message should still be saved
+    assert any(m.phone_number == "+5511222222222" for m in msg_repo.messages)
 
 
 def test_transcribes_audio_message():

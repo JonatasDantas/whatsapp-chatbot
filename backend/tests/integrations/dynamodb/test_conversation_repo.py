@@ -50,3 +50,31 @@ def test_save_updates_existing_conversation(dynamodb_table):
 
     loaded = repo.load("+5511999999999")
     assert loaded.stage == ConversationStage.AVAILABILITY
+
+
+def test_list_all_returns_sorted_by_updated_at_desc(dynamodb_table):
+    from datetime import datetime, timezone, timedelta
+    repo = DynamoDBConversationRepository(dynamodb_table)
+
+    older = Conversation(
+        phone_number="+5511111111111",
+        name="Older",
+        updated_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+    )
+    newer = Conversation(
+        phone_number="+5511222222222",
+        name="Newer",
+        updated_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+    )
+    repo.save(older)
+    repo.save(newer)
+
+    results = repo.list_all()
+    assert len(results) == 2
+    assert results[0].phone_number == "+5511222222222"  # newest first
+    assert results[1].phone_number == "+5511111111111"
+
+
+def test_list_all_empty(dynamodb_table):
+    repo = DynamoDBConversationRepository(dynamodb_table)
+    assert repo.list_all() == []

@@ -21,11 +21,17 @@ class PromptBuilder:
     def __init__(self):
         self._kb = _get_knowledge_base()
 
-    def build_system_prompt(self, conversation: Conversation) -> str:
+    def build_system_prompt(
+        self,
+        conversation: Conversation,
+        extra_context: dict | None = None,
+    ) -> str:
         state = conversation.model_dump(
             exclude={"created_at", "updated_at"},
             exclude_none=True,
         )
+        if extra_context:
+            state.update(extra_context)
         state_json = json.dumps(state, ensure_ascii=False, default=str)
         return (
             f"{self._kb}\n\n"
