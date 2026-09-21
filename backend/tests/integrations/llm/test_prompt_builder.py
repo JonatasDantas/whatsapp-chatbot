@@ -78,3 +78,22 @@ def test_system_prompt_extra_context_none_does_not_crash():
     conv = Conversation(phone_number="+5511999999999")
     prompt = builder.build_system_prompt(conv, extra_context=None)
     assert "Current Conversation State" in prompt
+
+
+def test_system_prompt_excludes_none_fields():
+    """None optional fields like checkin/checkout must not appear in the state JSON."""
+    builder = PromptBuilder()
+    conv = Conversation(phone_number="+5511999999999")
+    # checkin, checkout, guests are all None
+    prompt = builder.build_system_prompt(conv)
+    assert '"checkin"' not in prompt
+    assert '"checkout"' not in prompt
+    assert '"guests"' not in prompt
+
+
+def test_build_messages_empty_list():
+    builder = PromptBuilder()
+    result = builder.build_messages([])
+    assert result == []
+
+

@@ -229,3 +229,77 @@ def test_get_single_conversation_not_found_returns_404():
     event = _event("GET", "/api/conversations/{phone}", path_params={"phone": "unknown"})
     result = handler.handle(event)
     assert result["statusCode"] == 404
+
+
+def test_error_responses_include_cors_headers():
+    """4xx and 5xx responses must include CORS headers so the frontend can read the error body."""
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    not_found = handler.handle(_event("GET", "/api/unknown"))
+    assert "Access-Control-Allow-Origin" in not_found["headers"]
+    assert not_found["headers"]["Access-Control-Allow-Origin"] == "*"
+
+    blocked_503 = handler.handle(_event("GET", "/api/blocked-periods"))
+    assert "Access-Control-Allow-Origin" in blocked_503["headers"]
+
+
+def test_add_blocked_period_null_body_returns_400():
+    """POST /api/blocked-periods with no body should return 400, not crash."""
+    cal_repo = MagicMock()
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock(), calendar_repo=cal_repo)
+    event = {
+        "httpMethod": "POST",
+        "resource": "/api/blocked-periods",
+        "pathParameters": {},
+        "body": None,
+        "headers": {},
+    }
+    result = handler.handle(event)
+    assert result["statusCode"] == 400
+
+
+def test_url_encoded_phone_is_decoded_correctly():
+    """URL-encoded phone numbers like %2B5511999999999 should be decoded to +5511999999999."""
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = _make_conversation()
+    handler = AdminHandler(conv_repo, MagicMock(), MagicMock(), MagicMock())
+    event = _event("GET", "/api/conversations/{phone}", path_params={"phone": "%2B5511999999999"})
+    result = handler.handle(event)
+    assert result["statusCode"] == 200
+    conv_repo.load.assert_called_once_with("+5511999999999")
+
+
+def test_takeover_send_failure_still_returns_200():
+    """If WhatsApp send fails during takeover, the handler returns 200 and the conversation is still saved."""
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = _make_conversation()
+    whatsapp = MagicMock()
+    whatsapp.send_text.side_effect = RuntimeError("Evolution API down")
+    handler = AdminHandler(conv_repo, MagicMock(), MagicMock(), whatsapp)
+    event = _event("POST", "/api/conversations/{phone}/takeover",
+                   path_params={"phone": "%2B5511999999999"})
+    result = handler.handle(event)
+    assert result["statusCode"] == 200
+    conv_repo.save.assert_called_once()
+
+
+def test_add_blocked_period_without_calendar_repo_returns_503():
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    event = _event("POST", "/api/blocked-periods", body={"start_date": "2026-05-01", "end_date": "2026-05-03"})
+    result = handler.handle(event)
+    assert result["statusCode"] == 503
+
+
+def test_delete_blocked_period_without_calendar_repo_returns_503():
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    event = _event("DELETE", "/api/blocked-periods/{period_id}", path_params={"period_id": "abc"})
+    result = handler.handle(event)
+    assert result["statusCode"] == 503
+
+
+def test_delete_blocked_period_empty_id_returns_400():
+    """DELETE with an empty period_id path param should return 400."""
+    cal_repo = _make_calendar_repo()
+    handler = AdminHandler(MagicMock(), MagicMock(), MagicMock(), MagicMock(), calendar_repo=cal_repo)
+    event = _event("DELETE", "/api/blocked-periods/{period_id}", path_params={"period_id": ""})
+    result = handler.handle(event)
+    assert result["statusCode"] == 400

@@ -66,3 +66,22 @@ def test_get_blocked_dates(table):
     assert "2026-04-11" in blocked
     assert "2026-04-12" in blocked
     assert "2026-04-13" not in blocked
+
+
+def test_multiple_overlapping_periods_still_unavailable(table):
+    """Two separate blocked periods that together overlap a request window → unavailable."""
+    repo = DynamoDBCalendarRepository(table)
+    repo.add_period("2026-04-05", "2026-04-08")
+    repo.add_period("2026-04-12", "2026-04-15")
+    assert repo.is_available("2026-04-06", "2026-04-07") is False
+    assert repo.is_available("2026-04-13", "2026-04-14") is False
+    assert repo.is_available("2026-04-09", "2026-04-11") is True
+
+
+def test_get_blocked_dates_sorted(table):
+    """get_blocked_dates returns dates in ISO-sorted order."""
+    repo = DynamoDBCalendarRepository(table)
+    repo.add_period("2026-04-12", "2026-04-14")
+    repo.add_period("2026-04-10", "2026-04-12")
+    blocked = repo.get_blocked_dates()
+    assert blocked == sorted(blocked)

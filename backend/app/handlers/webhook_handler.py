@@ -1,7 +1,6 @@
 import json
 import os
 
-import boto3
 from aws_lambda_powertools import Logger
 
 from app.config.settings import _get_settings
@@ -37,42 +36,13 @@ def _get_pricing_service() -> PricingService:
         _pricing_service = PricingService(nightly_rate=nightly_rate)
     return _pricing_service
 
+
 logger = Logger()
-
-_ssm = None
-
-
-def _get_ssm():
-    global _ssm
-    if _ssm is None:
-        _ssm = boto3.client("ssm")
-    return _ssm
-
-
-def _get_verify_token() -> str:
-    param_name = os.environ.get("WHATSAPP_VERIFY_TOKEN_PARAM", "/chacara-chatbot/whatsapp-verify-token")
-    param = _get_ssm().get_parameter(Name=param_name, WithDecryption=True)
-    return param["Parameter"]["Value"]
 
 
 class WebhookHandler:
     def handle(self, event: dict, context) -> dict:
-        method = event.get("httpMethod", "POST")
-        if method == "GET":
-            return self._handle_verification(event)
         return self._handle_incoming(event)
-
-    def _handle_verification(self, event: dict) -> dict:
-        logger.info("webhook_verification_attempt")
-        params = event.get("queryStringParameters") or {}
-        mode = params.get("hub.mode")
-        token = params.get("hub.verify_token")
-        challenge = params.get("hub.challenge")
-        if mode == "subscribe" and token == _get_verify_token():
-            logger.info("webhook_verification_success")
-            return {"statusCode": 200, "body": challenge}
-        logger.warning("webhook_verification_failed", mode=mode)
-        return {"statusCode": 403, "body": "Forbidden"}
 
     def _handle_incoming(self, event: dict) -> dict:
         logger.info("incoming_webhook_received")
@@ -83,6 +53,9 @@ class WebhookHandler:
             return {"statusCode": 200, "body": "OK"}
 
         parsed_messages = MessageParser.parse(body)
+
+        if not parsed_messages:
+            return {"statusCode": 200, "body": "OK"}
 
         process_use_case = ProcessIncomingMessage(
             conversation_repo=get_conversation_repo(),

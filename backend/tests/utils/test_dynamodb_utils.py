@@ -33,3 +33,20 @@ def test_nested_dict_converted():
 
 def test_empty_dict():
     assert to_dynamodb_item({}) == {}
+
+
+def test_list_with_floats_converted_to_decimal():
+    """Floats inside list values must be converted to Decimal."""
+    result = to_dynamodb_item({"rates": [800.0, 1200.0]})
+    assert result["rates"] == [Decimal("800.0"), Decimal("1200.0")]
+
+
+def test_list_with_strings_preserved():
+    result = to_dynamodb_item({"tags": ["family", "birthday"]})
+    assert result["tags"] == ["family", "birthday"]
+
+
+def test_list_with_dicts_recursed():
+    result = to_dynamodb_item({"items": [{"price": 500.0, "label": "night"}]})
+    assert result["items"][0]["price"] == Decimal("500.0")
+    assert result["items"][0]["label"] == "night"

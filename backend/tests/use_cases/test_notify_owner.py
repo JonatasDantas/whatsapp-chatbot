@@ -75,3 +75,49 @@ def test_skips_if_lead_not_qualified():
     use_case.execute(phone_number="+5511999999999")
     whatsapp.send_text.assert_not_called()
     conv_repo.save.assert_not_called()
+
+
+def test_message_includes_all_optional_fields():
+    """Notification message includes name, checkin, checkout, guests, purpose, price when set."""
+    conv = Conversation(
+        phone_number="+5511999999999",
+        name="Maria",
+        stage=ConversationStage.PRICING,
+        checkin="2026-04-10",
+        checkout="2026-04-12",
+        guests=6,
+        purpose="birthday",
+        price_estimate=1600.0,
+        lead_status=LeadStatus.QUALIFIED,
+    )
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = conv
+    whatsapp = MagicMock()
+    use_case = NotifyOwner(conversation_repo=conv_repo, whatsapp_client=whatsapp, owner_phone="+5511888888888")
+    use_case.execute(phone_number="+5511999999999")
+
+    text = whatsapp.send_text.call_args[1]["text"]
+    assert "Maria" in text
+    assert "2026-04-10" in text
+    assert "2026-04-12" in text
+    assert "6" in text
+    assert "birthday" in text
+    assert "1600" in text
+
+
+def test_message_omits_none_optional_fields():
+    """Notification message does not include labels for fields that are None."""
+    conv = Conversation(
+        phone_number="+5511999999999",
+        lead_status=LeadStatus.QUALIFIED,
+    )
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = conv
+    whatsapp = MagicMock()
+    use_case = NotifyOwner(conversation_repo=conv_repo, whatsapp_client=whatsapp, owner_phone="+5511888888888")
+    use_case.execute(phone_number="+5511999999999")
+
+    text = whatsapp.send_text.call_args[1]["text"]
+    assert "Nome:" not in text
+    assert "Check-in:" not in text
+    assert "Estimativa:" not in text

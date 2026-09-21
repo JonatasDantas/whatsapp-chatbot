@@ -40,7 +40,6 @@ def _make_parsed_message(**overrides) -> ParsedMessage:
         "contact_name": "Maria",
         "message_type": "text",
         "content": "Hello",
-        "media_id": None,
         "whatsapp_message_id": "wamid.abc",
         "timestamp": "1710280800",
     }
@@ -89,19 +88,14 @@ def test_saves_user_message():
     assert msg_repo.messages[0].message_type == MessageType.TEXT
 
 
-def test_saves_audio_message_with_media_id():
+def test_saves_audio_message_type():
     conv_repo = FakeConversationRepo()
     msg_repo = FakeMessageRepo()
     use_case = ProcessIncomingMessage(conv_repo, msg_repo)
 
-    use_case.execute([_make_parsed_message(
-        message_type="audio",
-        content="",
-        media_id="media_123",
-    )])
+    use_case.execute([_make_parsed_message(message_type="audio", content="")])
 
     assert msg_repo.messages[0].message_type == MessageType.AUDIO
-    assert msg_repo.messages[0].media_id == "media_123"
 
 
 def test_processes_multiple_messages():
@@ -154,26 +148,34 @@ def test_error_in_one_message_does_not_stop_others():
     assert any(m.phone_number == "+5511222222222" for m in msg_repo.messages)
 
 
-def test_transcribes_audio_message():
-    # Arrange
+def test_audio_without_whisper_client_saves_empty_content():
+    """If no whisper_client is provided, audio message is saved with empty content (no crash)."""
     conv_repo = FakeConversationRepo()
     msg_repo = FakeMessageRepo()
-    whatsapp_client = MagicMock()
-    whatsapp_client.get_media_url.return_value = "https://cdn.example.com/audio.ogg"
-    whatsapp_client.download_media.return_value = b"audio-bytes"
+    use_case = ProcessIncomingMessage(conv_repo, msg_repo)  # no whisper_client
+
+    parsed = _make_parsed_message(message_type="audio", content="", audio_data=b"some-bytes")
+    use_case.execute([parsed])
+
+    assert len(msg_repo.messages) == 1
+    assert msg_repo.messages[0].message == ""
+    assert msg_repo.messages[0].message_type == MessageType.AUDIO
+
+
+def test_transcribes_audio_message():
+    conv_repo = FakeConversationRepo()
+    msg_repo = FakeMessageRepo()
     whisper_client = MagicMock()
     whisper_client.transcribe.return_value = "Oi, quero reservar para o fim de semana"
 
     from datetime import datetime, timezone
-    from app.integrations.whatsapp.message_parser import ParsedMessage
-    from app.domain.models.message import MessageType
 
     parsed = ParsedMessage(
         phone_number="+5511999999999",
         contact_name="Test",
-        message_type=MessageType.AUDIO,
+        message_type="audio",
         content="",
-        media_id="media-123",
+        audio_data=b"audio-bytes",
         whatsapp_message_id="waid-1",
         timestamp=str(int(datetime.now(timezone.utc).timestamp())),
     )
@@ -181,7 +183,6 @@ def test_transcribes_audio_message():
     use_case = ProcessIncomingMessage(
         conversation_repo=conv_repo,
         message_repo=msg_repo,
-        whatsapp_client=whatsapp_client,
         whisper_client=whisper_client,
     )
     use_case.execute([parsed])
@@ -189,5 +190,4 @@ def test_transcribes_audio_message():
     assert len(msg_repo.messages) == 1
     assert msg_repo.messages[0].message == "Oi, quero reservar para o fim de semana"
     assert msg_repo.messages[0].message_type == MessageType.AUDIO
-    whatsapp_client.get_media_url.assert_called_once_with("media-123")
     whisper_client.transcribe.assert_called_once_with(audio_data=b"audio-bytes")

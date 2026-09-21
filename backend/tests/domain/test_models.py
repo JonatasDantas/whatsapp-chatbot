@@ -103,3 +103,36 @@ def test_reservation_serialization():
     data = res.model_dump(mode="json")
     assert data["status"] == "cancelled"
     assert data["reservation_id"] == "r1"
+
+
+def test_conversation_serialization_for_admin_api():
+    """model_dump(mode='json') used by AdminHandler must produce JSON-serializable types."""
+    from datetime import datetime, timezone
+    conv = Conversation(
+        phone_number="+5511999999999",
+        name="Maria",
+        stage=ConversationStage.QUALIFICATION,
+        price_estimate=1600.0,
+        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+    )
+    data = conv.model_dump(mode="json")
+    assert data["phone_number"] == "+5511999999999"
+    assert data["stage"] == "qualification"
+    assert data["price_estimate"] == 1600.0
+    assert isinstance(data["created_at"], str)
+
+
+def test_message_serialization():
+    from datetime import datetime, timezone
+    msg = Message(
+        phone_number="+5511999999999",
+        role=MessageRole.ASSISTANT,
+        message="Olá!",
+        message_type=MessageType.TEXT,
+        timestamp=datetime(2026, 3, 1, tzinfo=timezone.utc),
+    )
+    data = msg.model_dump(mode="json")
+    assert data["role"] == "assistant"
+    assert data["message_type"] == "text"
+    assert isinstance(data["timestamp"], str)

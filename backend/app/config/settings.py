@@ -8,14 +8,20 @@ _settings = None
 class Settings:
     def __init__(self):
         self.openai_model: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        self.openai_api_key: str = ""
+        self.evolution_api_url: str = ""
+        self.evolution_api_key: str = ""
+        self.evolution_instance_name: str = ""
+        self.knowledge_base_bucket: str = ""
         self.owner_phone: str = ""
 
         param_names = {
             attr: os.environ[env_var]
             for attr, env_var in {
                 "openai_api_key": "OPENAI_API_KEY_PARAM",
-                "whatsapp_access_token": "WHATSAPP_ACCESS_TOKEN_PARAM",
-                "whatsapp_phone_number_id": "WHATSAPP_PHONE_NUMBER_ID_PARAM",
+                "evolution_api_url": "EVOLUTION_API_URL_PARAM",
+                "evolution_api_key": "EVOLUTION_API_KEY_PARAM",
+                "evolution_instance_name": "EVOLUTION_INSTANCE_NAME_PARAM",
                 "knowledge_base_bucket": "KNOWLEDGE_BASE_BUCKET_PARAM",
                 "owner_phone": "OWNER_PHONE_PARAM",
             }.items()

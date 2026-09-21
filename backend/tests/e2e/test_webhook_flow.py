@@ -13,6 +13,7 @@ External dependencies mocked:
 
 This validates that the data flows correctly between layers.
 """
+import base64
 import json
 import os
 import pytest
@@ -25,32 +26,23 @@ from moto import mock_aws
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _text_message_event(phone: str, text: str, timestamp: str = "1710280800") -> dict:
-    wa_id = phone.lstrip("+")
+    number = phone.lstrip("+")
     return {
         "httpMethod": "POST",
         "body": json.dumps({
-            "object": "whatsapp_business_account",
-            "entry": [{
-                "id": "BIZ_ID",
-                "changes": [{
-                    "value": {
-                        "messaging_product": "whatsapp",
-                        "metadata": {
-                            "display_phone_number": "15550000000",
-                            "phone_number_id": "123",
-                        },
-                        "contacts": [{"profile": {"name": "Maria Silva"}, "wa_id": wa_id}],
-                        "messages": [{
-                            "from": wa_id,
-                            "id": "wamid.test1",
-                            "timestamp": timestamp,
-                            "type": "text",
-                            "text": {"body": text},
-                        }],
-                    },
-                    "field": "messages",
-                }],
-            }],
+            "event": "messages.upsert",
+            "instance": "chacara",
+            "data": {
+                "key": {
+                    "remoteJid": f"{number}@s.whatsapp.net",
+                    "fromMe": False,
+                    "id": "wamid.test1",
+                },
+                "pushName": "Maria Silva",
+                "message": {"conversation": text},
+                "messageType": "conversation",
+                "messageTimestamp": int(timestamp),
+            },
         }),
     }
 
@@ -59,8 +51,9 @@ def _fake_settings():
     s = MagicMock()
     s.openai_api_key = "sk-test"
     s.openai_model = "gpt-4o-mini"
-    s.whatsapp_access_token = "wa-token"
-    s.whatsapp_phone_number_id = "123"
+    s.evolution_api_url = "https://evolution.example.com"
+    s.evolution_api_key = "evo-key"
+    s.evolution_instance_name = "chacara"
     s.knowledge_base_bucket = "kb-bucket"
     s.owner_phone = "+5511888888888"
     return s
@@ -98,13 +91,11 @@ def reset_all_singletons():
     openai_mod._openai_raw = None
     pb_mod._knowledge_base = None
     wa_mod._client = None
-    wh_mod._ssm = None
     wh_mod._availability_service = None
     wh_mod._pricing_service = None
 
     yield
 
-    # Reset again after test
     settings_mod._settings = None
     conv_mod._repo = None
     conv_mod._table = None
@@ -122,7 +113,6 @@ def reset_all_singletons():
     openai_mod._openai_raw = None
     pb_mod._knowledge_base = None
     wa_mod._client = None
-    wh_mod._ssm = None
     wh_mod._availability_service = None
     wh_mod._pricing_service = None
 
@@ -180,7 +170,7 @@ def tables(monkeypatch):
 
 def test_incoming_message_creates_conversation_and_sends_reply(tables, monkeypatch):
     """
-    Full flow: WhatsApp POST → conversation created → LLM called → reply sent.
+    Full flow: Evolution API POST → conversation created → LLM called → reply sent.
     """
     import app.config.settings as settings_mod
     monkeypatch.setattr(settings_mod, "_settings", _fake_settings())
@@ -194,8 +184,7 @@ def test_incoming_message_creates_conversation_and_sends_reply(tables, monkeypat
 
     with patch("app.integrations.llm.openai_client._get_openai_raw", return_value=fake_openai), \
          patch("app.integrations.llm.prompt_builder._get_knowledge_base", return_value="## Property Info\nTest property."), \
-         patch("httpx.post") as mock_wa_send, \
-         patch("app.handlers.webhook_handler._get_verify_token", return_value="token"):
+         patch("httpx.post") as mock_wa_send:
 
         mock_wa_send.return_value = MagicMock(raise_for_status=MagicMock())
 
@@ -206,13 +195,11 @@ def test_incoming_message_creates_conversation_and_sends_reply(tables, monkeypat
 
     assert response["statusCode"] == 200
 
-    # Verify conversation was persisted in DynamoDB
     item = tables["conversations"].get_item(Key={"phone_number": "+5511999999999"}).get("Item")
     assert item is not None
     assert item["phone_number"] == "+5511999999999"
     assert item["name"] == "Maria Silva"
 
-    # Verify message was persisted
     msgs = tables["messages"].scan().get("Items", [])
     user_msgs = [m for m in msgs if m["role"] == "user"]
     assistant_msgs = [m for m in msgs if m["role"] == "assistant"]
@@ -221,11 +208,10 @@ def test_incoming_message_creates_conversation_and_sends_reply(tables, monkeypat
     assert len(assistant_msgs) == 1
     assert assistant_msgs[0]["message"] == "Olá, Maria! Como posso ajudar?"
 
-    # Verify WhatsApp reply was sent
     mock_wa_send.assert_called_once()
     payload = mock_wa_send.call_args.kwargs["json"]
-    assert payload["to"] == "+5511999999999"
-    assert payload["text"]["body"] == "Olá, Maria! Como posso ajudar?"
+    assert payload["number"] == "+5511999999999"
+    assert payload["text"] == "Olá, Maria! Como posso ajudar?"
 
 
 def test_incoming_message_updates_conversation_stage(tables, monkeypatch):
@@ -245,8 +231,7 @@ def test_incoming_message_updates_conversation_stage(tables, monkeypatch):
 
     with patch("app.integrations.llm.openai_client._get_openai_raw", return_value=fake_openai), \
          patch("app.integrations.llm.prompt_builder._get_knowledge_base", return_value="## KB\nTest."), \
-         patch("httpx.post") as mock_wa_send, \
-         patch("app.handlers.webhook_handler._get_verify_token", return_value="token"):
+         patch("httpx.post") as mock_wa_send:
 
         mock_wa_send.return_value = MagicMock(raise_for_status=MagicMock())
 
@@ -267,7 +252,6 @@ def test_second_message_continues_existing_conversation(tables, monkeypatch):
     import app.config.settings as settings_mod
     monkeypatch.setattr(settings_mod, "_settings", _fake_settings())
 
-    # Insert existing conversation directly
     tables["conversations"].put_item(Item={
         "phone_number": "+5511999999999",
         "name": "Maria Silva",
@@ -293,8 +277,7 @@ def test_second_message_continues_existing_conversation(tables, monkeypatch):
 
     with patch("app.integrations.llm.openai_client._get_openai_raw", return_value=fake_openai), \
          patch("app.integrations.llm.prompt_builder._get_knowledge_base", return_value="## KB\nTest."), \
-         patch("httpx.post") as mock_wa_send, \
-         patch("app.handlers.webhook_handler._get_verify_token", return_value="token"):
+         patch("httpx.post") as mock_wa_send:
 
         mock_wa_send.return_value = MagicMock(raise_for_status=MagicMock())
 
@@ -302,10 +285,9 @@ def test_second_message_continues_existing_conversation(tables, monkeypatch):
         handler = WebhookHandler()
         handler.handle(_text_message_event("+5511999999999", "E no final de semana?"), None)
 
-    # Stage should still be availability (LLM didn't change it)
     item = tables["conversations"].get_item(Key={"phone_number": "+5511999999999"}).get("Item")
     assert item["stage"] == "availability"
-    assert item["checkin"] == "2026-04-10"  # Preserved from pre-existing conversation
+    assert item["checkin"] == "2026-04-10"
 
 
 def test_owner_takeover_stops_ai_response(tables, monkeypatch):
@@ -334,8 +316,7 @@ def test_owner_takeover_stops_ai_response(tables, monkeypatch):
 
     with patch("app.integrations.llm.openai_client._get_openai_raw", return_value=fake_openai), \
          patch("app.integrations.llm.prompt_builder._get_knowledge_base", return_value="## KB"), \
-         patch("httpx.post") as mock_wa_send, \
-         patch("app.handlers.webhook_handler._get_verify_token", return_value="token"):
+         patch("httpx.post") as mock_wa_send:
 
         mock_wa_send.return_value = MagicMock(raise_for_status=MagicMock())
 
@@ -344,64 +325,31 @@ def test_owner_takeover_stops_ai_response(tables, monkeypatch):
         response = handler.handle(_text_message_event("+5511999999999", "Oi, alguma novidade?"), None)
 
     assert response["statusCode"] == 200
-
-    # OpenAI must NOT have been called
     fake_openai.chat.completions.create.assert_not_called()
-    # WhatsApp send must NOT have been called (user message is saved but no reply)
     mock_wa_send.assert_not_called()
 
 
 def test_status_update_webhook_returns_200(tables, monkeypatch):
-    """WhatsApp status delivery updates (not messages) must return 200 without errors."""
+    """Non-message events must return 200 without errors."""
     import app.config.settings as settings_mod
     monkeypatch.setattr(settings_mod, "_settings", _fake_settings())
+
     event = {
         "httpMethod": "POST",
         "body": json.dumps({
-            "object": "whatsapp_business_account",
-            "entry": [{
-                "id": "BIZ_ID",
-                "changes": [{
-                    "value": {
-                        "messaging_product": "whatsapp",
-                        "metadata": {},
-                        "statuses": [{"id": "wamid.s1", "status": "delivered", "recipient_id": "123"}],
-                    },
-                    "field": "messages",
-                }],
-            }],
+            "event": "connection.update",
+            "instance": "chacara",
+            "data": {"state": "open"},
         }),
     }
 
-    with patch("app.integrations.llm.prompt_builder._get_knowledge_base", return_value="## KB"), \
-         patch("app.handlers.webhook_handler._get_verify_token", return_value="token"):
-        from app.handlers.webhook_handler import WebhookHandler
-        handler = WebhookHandler()
-        response = handler.handle(event, None)
+    from app.handlers.webhook_handler import WebhookHandler
+    handler = WebhookHandler()
+    response = handler.handle(event, None)
 
     assert response["statusCode"] == 200
-    # No messages should be saved (no user message in payload)
     msgs = tables["messages"].scan().get("Items", [])
     assert len(msgs) == 0
-
-
-def test_webhook_verification_get_request():
-    """WhatsApp GET verification must return the challenge when token matches."""
-    with patch("app.handlers.webhook_handler._get_verify_token", return_value="secret-token"):
-        from app.handlers.webhook_handler import WebhookHandler
-        handler = WebhookHandler()
-        event = {
-            "httpMethod": "GET",
-            "queryStringParameters": {
-                "hub.mode": "subscribe",
-                "hub.verify_token": "secret-token",
-                "hub.challenge": "challenge_xyz",
-            },
-        }
-        response = handler.handle(event, None)
-
-    assert response["statusCode"] == 200
-    assert response["body"] == "challenge_xyz"
 
 
 def test_qualified_lead_notifies_owner(tables, monkeypatch):
@@ -440,8 +388,7 @@ def test_qualified_lead_notifies_owner(tables, monkeypatch):
 
     with patch("app.integrations.llm.openai_client._get_openai_raw", return_value=fake_openai), \
          patch("app.integrations.llm.prompt_builder._get_knowledge_base", return_value="## KB\nTest."), \
-         patch("httpx.post") as mock_wa_send, \
-         patch("app.handlers.webhook_handler._get_verify_token", return_value="token"):
+         patch("httpx.post") as mock_wa_send:
 
         mock_wa_send.return_value = MagicMock(raise_for_status=MagicMock())
 
@@ -453,14 +400,12 @@ def test_qualified_lead_notifies_owner(tables, monkeypatch):
 
     assert response["statusCode"] == 200
 
-    # Owner should be notified
     item = tables["conversations"].get_item(Key={"phone_number": "+5511999999999"}).get("Item")
     assert item["lead_status"] == "qualified"
     assert item["owner_notified"] is True
 
-    # Two WhatsApp sends: one to guest, one to owner
     assert mock_wa_send.call_count == 2
-    sent_to = [call.kwargs["json"]["to"] for call in mock_wa_send.call_args_list]
+    sent_to = [call.kwargs["json"]["number"] for call in mock_wa_send.call_args_list]
     assert "+5511999999999" in sent_to
     assert "+5511888888888" in sent_to
 
@@ -484,7 +429,7 @@ def test_pricing_calculated_and_persisted(tables, monkeypatch):
         "purpose": "anniversary",
         "customer_profile": None,
         "rules_accepted": True,
-        "price_estimate": None,  # not yet calculated
+        "price_estimate": None,
         "lead_status": "new",
         "owner_notified": False,
         "created_at": "2026-03-01T00:00:00+00:00",
@@ -502,8 +447,7 @@ def test_pricing_calculated_and_persisted(tables, monkeypatch):
 
     with patch("app.integrations.llm.openai_client._get_openai_raw", return_value=fake_openai), \
          patch("app.integrations.llm.prompt_builder._get_knowledge_base", return_value="## KB\nTest."), \
-         patch("httpx.post") as mock_wa_send, \
-         patch("app.handlers.webhook_handler._get_verify_token", return_value="token"):
+         patch("httpx.post") as mock_wa_send:
 
         mock_wa_send.return_value = MagicMock(raise_for_status=MagicMock())
 
@@ -511,7 +455,137 @@ def test_pricing_calculated_and_persisted(tables, monkeypatch):
         handler = WebhookHandler()
         handler.handle(_text_message_event("+5511999999999", "Qual o preço?"), None)
 
-    # price_estimate should now be stored (2 nights × R$800)
     item = tables["conversations"].get_item(Key={"phone_number": "+5511999999999"}).get("Item")
     from decimal import Decimal
     assert item.get("price_estimate") == Decimal("1600.0")
+
+
+def _audio_message_event(phone: str, audio_bytes: bytes) -> dict:
+    number = phone.lstrip("+")
+    b64 = base64.b64encode(audio_bytes).decode()
+    return {
+        "httpMethod": "POST",
+        "body": json.dumps({
+            "event": "messages.upsert",
+            "instance": "chacara",
+            "data": {
+                "key": {
+                    "remoteJid": f"{number}@s.whatsapp.net",
+                    "fromMe": False,
+                    "id": "wamid.audio1",
+                },
+                "pushName": "João",
+                "message": {"base64": b64},
+                "messageType": "audioMessage",
+                "messageTimestamp": 1710280800,
+            },
+        }),
+    }
+
+
+def test_audio_message_is_transcribed_and_processed(tables, monkeypatch):
+    """
+    Full flow: audio webhook → Whisper transcription → conversation created → LLM → reply sent.
+    """
+    import app.config.settings as settings_mod
+    monkeypatch.setattr(settings_mod, "_settings", _fake_settings())
+
+    transcription = "Quero reservar para o fim de semana"
+    fake_whisper = MagicMock()
+    fake_whisper.transcribe.return_value = transcription
+
+    llm_response = json.dumps({"response": "Ótimo! Quais datas?", "updates": {}})
+    fake_openai = MagicMock()
+    fake_openai.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=llm_response))]
+    )
+
+    with patch("app.integrations.llm.openai_client._get_openai_raw", return_value=fake_openai), \
+         patch("app.integrations.llm.prompt_builder._get_knowledge_base", return_value="## KB\nTest."), \
+         patch("app.handlers.webhook_handler.get_whisper_client", return_value=fake_whisper), \
+         patch("httpx.post") as mock_wa_send:
+
+        mock_wa_send.return_value = MagicMock(raise_for_status=MagicMock())
+
+        from app.handlers.webhook_handler import WebhookHandler
+        handler = WebhookHandler()
+        event = _audio_message_event("+5511999999999", b"fake-audio-data")
+        response = handler.handle(event, None)
+
+    assert response["statusCode"] == 200
+
+    fake_whisper.transcribe.assert_called_once_with(audio_data=b"fake-audio-data")
+
+    msgs = tables["messages"].scan().get("Items", [])
+    user_msgs = [m for m in msgs if m["role"] == "user"]
+    assert len(user_msgs) == 1
+    assert user_msgs[0]["message"] == transcription
+
+    mock_wa_send.assert_called_once()
+    payload = mock_wa_send.call_args.kwargs["json"]
+    assert payload["number"] == "+5511999999999"
+    assert payload["text"] == "Ótimo! Quais datas?"
+
+
+def test_llm_error_returns_200_and_logs(tables, monkeypatch):
+    """
+    If the LLM call raises an exception, the webhook still returns 200.
+    The conversation is saved with the user message, but no assistant reply is sent.
+    """
+    import app.config.settings as settings_mod
+    monkeypatch.setattr(settings_mod, "_settings", _fake_settings())
+
+    fake_openai = MagicMock()
+    fake_openai.chat.completions.create.side_effect = RuntimeError("OpenAI is down")
+
+    with patch("app.integrations.llm.openai_client._get_openai_raw", return_value=fake_openai), \
+         patch("app.integrations.llm.prompt_builder._get_knowledge_base", return_value="## KB\nTest."), \
+         patch("httpx.post") as mock_wa_send:
+
+        mock_wa_send.return_value = MagicMock(raise_for_status=MagicMock())
+
+        from app.handlers.webhook_handler import WebhookHandler
+        handler = WebhookHandler()
+        response = handler.handle(_text_message_event("+5511999999999", "Olá!"), None)
+
+    assert response["statusCode"] == 200
+    mock_wa_send.assert_not_called()
+
+    msgs = tables["messages"].scan().get("Items", [])
+    user_msgs = [m for m in msgs if m["role"] == "user"]
+    assert len(user_msgs) == 1
+
+
+def test_whatsapp_send_failure_returns_200(tables, monkeypatch):
+    """
+    If send_text raises (Evolution API down), the webhook still returns 200.
+    The user message and assistant message are saved to DynamoDB.
+    """
+    import app.config.settings as settings_mod
+    monkeypatch.setattr(settings_mod, "_settings", _fake_settings())
+
+    llm_response = json.dumps({"response": "Tudo bem!", "updates": {}})
+    fake_openai = MagicMock()
+    fake_openai.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=llm_response))]
+    )
+
+    with patch("app.integrations.llm.openai_client._get_openai_raw", return_value=fake_openai), \
+         patch("app.integrations.llm.prompt_builder._get_knowledge_base", return_value="## KB\nTest."), \
+         patch("httpx.post") as mock_wa_send:
+
+        mock_wa_send.return_value = MagicMock(
+            raise_for_status=MagicMock(side_effect=RuntimeError("connection refused"))
+        )
+
+        from app.handlers.webhook_handler import WebhookHandler
+        handler = WebhookHandler()
+        response = handler.handle(_text_message_event("+5511999999999", "Oi!"), None)
+
+    assert response["statusCode"] == 200
+
+    msgs = tables["messages"].scan().get("Items", [])
+    user_msgs = [m for m in msgs if m["role"] == "user"]
+    assistant_msgs = [m for m in msgs if m["role"] == "assistant"]
+    assert len(user_msgs) == 1
+    assert len(assistant_msgs) == 1

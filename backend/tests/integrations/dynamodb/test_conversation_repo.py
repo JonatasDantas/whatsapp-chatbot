@@ -78,3 +78,15 @@ def test_list_all_returns_sorted_by_updated_at_desc(dynamodb_table):
 def test_list_all_empty(dynamodb_table):
     repo = DynamoDBConversationRepository(dynamodb_table)
     assert repo.list_all() == []
+
+
+def test_save_and_load_with_price_estimate(dynamodb_table):
+    """price_estimate (float) must survive the float→Decimal→float round-trip via DynamoDB."""
+    repo = DynamoDBConversationRepository(dynamodb_table)
+    conv = Conversation(phone_number="+5511999999999", price_estimate=1600.0)
+    repo.save(conv)
+
+    loaded = repo.load("+5511999999999")
+    assert loaded is not None
+    assert loaded.price_estimate == 1600.0
+    assert isinstance(loaded.price_estimate, float)

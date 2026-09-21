@@ -15,18 +15,13 @@ class BackendStack(Stack):
         messages_table = self._create_messages_table()
         reservations_table = self._create_reservations_table()
 
-        verify_token_param = ssm.StringParameter.from_secure_string_parameter_attributes(
-            self,
-            "WhatsappVerifyTokenParam",
-            parameter_name="/chacara-chatbot/whatsapp-verify-token",
-        )
-
         blocked_periods_table = self._create_blocked_periods_table()
 
         (
             openai_key_param,
-            whatsapp_token_param,
-            whatsapp_phone_param,
+            evolution_url_param,
+            evolution_key_param,
+            evolution_instance_param,
             knowledge_base_param,
             owner_phone_param,
         ) = self._create_settings_parameters()
@@ -36,10 +31,10 @@ class BackendStack(Stack):
             messages_table,
             reservations_table,
             blocked_periods_table,
-            verify_token_param,
             openai_key_param,
-            whatsapp_token_param,
-            whatsapp_phone_param,
+            evolution_url_param,
+            evolution_key_param,
+            evolution_instance_param,
             knowledge_base_param,
             owner_phone_param,
         )
@@ -108,23 +103,30 @@ class BackendStack(Stack):
         )
 
     def _create_settings_parameters(self) -> tuple:
-        # These two already exist in SSM as SecureString — managed manually, not created by CDK.
-        # They must exist before deploying, or the Lambda will fail at runtime.
+        # SecureString params — managed manually in SSM, must exist before deploying.
         openai_key = ssm.StringParameter.from_secure_string_parameter_attributes(
             self,
             "OpenAiApiKeyParam",
             parameter_name="/chacara-chatbot/openai-api-key",
         )
-        whatsapp_token = ssm.StringParameter.from_secure_string_parameter_attributes(
+        evolution_key = ssm.StringParameter.from_secure_string_parameter_attributes(
             self,
-            "WhatsappAccessTokenParam",
-            parameter_name="/chacara-chatbot/whatsapp-access-token",
+            "EvolutionApiKeyParam",
+            parameter_name="/chacara-chatbot/evolution-api-key",
         )
-        whatsapp_phone = ssm.StringParameter(
+        evolution_url = ssm.StringParameter(
             self,
-            "WhatsappPhoneNumberIdParam",
-            parameter_name="/chacara-chatbot/whatsapp-phone-number-id",
+            "EvolutionApiUrlParam",
+            parameter_name="/chacara-chatbot/evolution-api-url",
             string_value="REPLACE_ME",
+            description="Base URL of the Evolution API EC2 instance (e.g. https://evolution.yourdomain.com)",
+        )
+        evolution_instance = ssm.StringParameter(
+            self,
+            "EvolutionInstanceNameParam",
+            parameter_name="/chacara-chatbot/evolution-instance-name",
+            string_value="REPLACE_ME",
+            description="Evolution API instance name (e.g. chacara)",
         )
         knowledge_base = ssm.StringParameter(
             self,
@@ -139,7 +141,7 @@ class BackendStack(Stack):
             string_value="REPLACE_ME",
             description="Owner's WhatsApp phone number for lead notifications (e.g. +5511999999999)",
         )
-        return openai_key, whatsapp_token, whatsapp_phone, knowledge_base, owner_phone
+        return openai_key, evolution_url, evolution_key, evolution_instance, knowledge_base, owner_phone
 
     def _create_webhook_function(
         self,
@@ -147,10 +149,10 @@ class BackendStack(Stack):
         messages_table: dynamodb.Table,
         reservations_table: dynamodb.Table,
         blocked_periods_table: dynamodb.Table,
-        verify_token_param: ssm.IStringParameter,
         openai_key_param: ssm.IStringParameter,
-        whatsapp_token_param: ssm.IStringParameter,
-        whatsapp_phone_param: ssm.IStringParameter,
+        evolution_url_param: ssm.IStringParameter,
+        evolution_key_param: ssm.IStringParameter,
+        evolution_instance_param: ssm.IStringParameter,
         knowledge_base_param: ssm.IStringParameter,
         owner_phone_param: ssm.IStringParameter,
     ) -> _lambda.Function:
@@ -173,10 +175,10 @@ class BackendStack(Stack):
                 "MESSAGES_TABLE": messages_table.table_name,
                 "RESERVATIONS_TABLE": reservations_table.table_name,
                 "BLOCKED_PERIODS_TABLE": blocked_periods_table.table_name,
-                "WHATSAPP_VERIFY_TOKEN_PARAM": verify_token_param.parameter_name,
                 "OPENAI_API_KEY_PARAM": openai_key_param.parameter_name,
-                "WHATSAPP_ACCESS_TOKEN_PARAM": whatsapp_token_param.parameter_name,
-                "WHATSAPP_PHONE_NUMBER_ID_PARAM": whatsapp_phone_param.parameter_name,
+                "EVOLUTION_API_URL_PARAM": evolution_url_param.parameter_name,
+                "EVOLUTION_API_KEY_PARAM": evolution_key_param.parameter_name,
+                "EVOLUTION_INSTANCE_NAME_PARAM": evolution_instance_param.parameter_name,
                 "KNOWLEDGE_BASE_BUCKET_PARAM": knowledge_base_param.parameter_name,
                 "OWNER_PHONE_PARAM": owner_phone_param.parameter_name,
                 "NIGHTLY_RATE": "800.0",
@@ -187,7 +189,6 @@ class BackendStack(Stack):
         messages_table.grant_read_write_data(function)
         reservations_table.grant_read_write_data(function)
         blocked_periods_table.grant_read_write_data(function)
-        verify_token_param.grant_read(function)
 
         # ssm:GetParameters (plural) for the batched get_parameters() call in Settings
         function.add_to_role_policy(
@@ -195,8 +196,9 @@ class BackendStack(Stack):
                 actions=["ssm:GetParameters"],
                 resources=[
                     openai_key_param.parameter_arn,
-                    whatsapp_token_param.parameter_arn,
-                    whatsapp_phone_param.parameter_arn,
+                    evolution_url_param.parameter_arn,
+                    evolution_key_param.parameter_arn,
+                    evolution_instance_param.parameter_arn,
                     knowledge_base_param.parameter_arn,
                     owner_phone_param.parameter_arn,
                 ],
