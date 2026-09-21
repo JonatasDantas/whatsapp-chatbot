@@ -1,49 +1,71 @@
-import httpx, pytest
 from unittest.mock import MagicMock, patch
+
 from app.integrations.whatsapp.whatsapp_client import WhatsAppClient
+
+
+def _make_client():
+    return WhatsAppClient(
+        api_url="https://evolution.example.com",
+        api_key="test-key",
+        instance_name="chacara",
+    )
+
 
 def test_send_text_calls_correct_endpoint():
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
 
     with patch("httpx.post", return_value=mock_response) as mock_post:
-        client = WhatsAppClient(access_token="tok", phone_number_id="999")
-        client.send_text(to="+5511999999999", text="Olá!")
+        _make_client().send_text(to="+5511999999999", text="Olá!")
 
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
-        assert "999" in args[0]
-        assert kwargs["json"]["to"] == "+5511999999999"
-        assert kwargs["json"]["text"]["body"] == "Olá!"
-        assert kwargs["headers"]["Authorization"] == "Bearer tok"
+        assert "chacara" in args[0]
+        assert "sendText" in args[0]
+        assert kwargs["json"]["number"] == "+5511999999999"
+        assert kwargs["json"]["text"] == "Olá!"
+        assert kwargs["headers"]["apikey"] == "test-key"
 
 
-def test_get_media_url_returns_url():
+def test_send_text_uses_api_url():
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
-    mock_response.json.return_value = {"url": "https://cdn.whatsapp.net/audio/123.ogg"}
 
-    with patch("httpx.get", return_value=mock_response) as mock_get:
-        client = WhatsAppClient(access_token="tok", phone_number_id="999")
-        url = client.get_media_url(media_id="media-abc")
+    with patch("httpx.post", return_value=mock_response) as mock_post:
+        _make_client().send_text(to="+5511999999999", text="Hi")
 
-        mock_get.assert_called_once()
-        args, kwargs = mock_get.call_args
-        assert "media-abc" in args[0]
-        assert kwargs["headers"]["Authorization"] == "Bearer tok"
-        assert url == "https://cdn.whatsapp.net/audio/123.ogg"
+        url = mock_post.call_args.args[0]
+        assert url.startswith("https://evolution.example.com")
 
 
-def test_download_media_returns_bytes():
+def test_send_text_strips_trailing_slash_from_url():
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()
-    mock_response.content = b"fake-audio-bytes"
 
-    with patch("httpx.get", return_value=mock_response) as mock_get:
-        client = WhatsAppClient(access_token="tok", phone_number_id="999")
-        data = client.download_media("https://cdn.whatsapp.net/audio/123.ogg")
+    with patch("httpx.post", return_value=mock_response) as mock_post:
+        client = WhatsAppClient(
+            api_url="https://evolution.example.com/",
+            api_key="key",
+            instance_name="inst",
+        )
+        client.send_text(to="+55", text="Hi")
 
-        mock_get.assert_called_once()
-        call_headers = mock_get.call_args.kwargs["headers"]
-        assert call_headers["Authorization"] == "Bearer tok"
-        assert data == b"fake-audio-bytes"
+        url = mock_post.call_args.args[0]
+        assert "//" not in url.replace("https://", "")
+
+
+def test_send_text_raises_on_http_error():
+    """Evolution API 4xx/5xx responses propagate via raise_for_status."""
+    import httpx
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "401 Unauthorized",
+        request=MagicMock(),
+        response=MagicMock(status_code=401),
+    )
+
+    with patch("httpx.post", return_value=mock_response):
+        import pytest
+        with pytest.raises(httpx.HTTPStatusError):
+            _make_client().send_text(to="+55", text="Hi")

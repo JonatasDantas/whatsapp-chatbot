@@ -81,3 +81,33 @@ def test_get_returns_none_when_not_found():
     repo = DynamoDBReservationRepository(table)
     result = repo.get("missing_id")
     assert result is None
+
+
+def test_get_reservation_repo_singleton(monkeypatch):
+    """get_reservation_repo() returns the same instance on repeated calls."""
+    import boto3
+    from moto import mock_aws
+    import app.integrations.dynamodb.reservation_repo as mod
+
+    monkeypatch.setenv("RESERVATIONS_TABLE", "Reservations")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    mod._repo = None
+    mod._table = None
+    mod._dynamodb = None
+
+    with mock_aws():
+        boto3.resource("dynamodb", region_name="us-east-1").create_table(
+            TableName="Reservations",
+            KeySchema=[{"AttributeName": "reservation_id", "KeyType": "HASH"}],
+            AttributeDefinitions=[{"AttributeName": "reservation_id", "AttributeType": "S"}],
+            BillingMode="PAY_PER_REQUEST",
+        )
+        r1 = mod.get_reservation_repo()
+        r2 = mod.get_reservation_repo()
+        assert r1 is r2
+
+    mod._repo = None
+    mod._table = None
+    mod._dynamodb = None

@@ -388,3 +388,152 @@ def test_skips_pricing_when_price_already_set():
     use_case.execute(phone_number="+5511999999999")
 
     pricing_service.calculate.assert_not_called()
+
+
+def test_creates_new_conversation_when_none_found():
+    """If conversation_repo.load returns None, a new Conversation is created in memory."""
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = None
+    msg_repo = MagicMock()
+    msg_repo.get_recent.return_value = []
+    prompt_builder = MagicMock()
+    prompt_builder.build_system_prompt.return_value = "system"
+    prompt_builder.build_messages.return_value = []
+    openai_client = MagicMock()
+    openai_client.chat.return_value = ("Olá!", {})
+    whatsapp_client = MagicMock()
+
+    use_case = GenerateAIResponse(
+        conversation_repo=conv_repo,
+        message_repo=msg_repo,
+        openai_client=openai_client,
+        prompt_builder=prompt_builder,
+        whatsapp_client=whatsapp_client,
+    )
+    use_case.execute(phone_number="+5511999999999")
+
+    conv_repo.save.assert_called_once()
+    saved = conv_repo.save.call_args[0][0]
+    assert saved.phone_number == "+5511999999999"
+    whatsapp_client.send_text.assert_called_once()
+
+
+def test_disallowed_llm_keys_are_ignored():
+    """LLM updates with keys not in the allowed set are silently ignored."""
+    conv = Conversation(phone_number="+5511999999999")
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = conv
+    msg_repo = MagicMock()
+    msg_repo.get_recent.return_value = []
+    prompt_builder = MagicMock()
+    prompt_builder.build_system_prompt.return_value = "system"
+    prompt_builder.build_messages.return_value = []
+    openai_client = MagicMock()
+    openai_client.chat.return_value = ("Ok!", {"unknown_field": "value", "stage": "greeting"})
+    whatsapp_client = MagicMock()
+
+    use_case = GenerateAIResponse(
+        conversation_repo=conv_repo,
+        message_repo=msg_repo,
+        openai_client=openai_client,
+        prompt_builder=prompt_builder,
+        whatsapp_client=whatsapp_client,
+    )
+    use_case.execute(phone_number="+5511999999999")
+
+    saved = conv_repo.save.call_args[0][0]
+    assert not hasattr(saved, "unknown_field") or getattr(saved, "unknown_field", None) is None
+    assert saved.stage == ConversationStage.GREETING
+
+
+def test_send_text_failure_does_not_prevent_owner_notification():
+    """If WhatsApp send fails, the owner notification should still be attempted."""
+    conv = Conversation(phone_number="+5511999999999", stage=ConversationStage.PRICING)
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = conv
+    msg_repo = MagicMock()
+    msg_repo.get_recent.return_value = []
+    prompt_builder = MagicMock()
+    prompt_builder.build_system_prompt.return_value = "system"
+    prompt_builder.build_messages.return_value = []
+    openai_client = MagicMock()
+    openai_client.chat.return_value = ("Perfeito!", {"lead_status": "qualified"})
+    whatsapp_client = MagicMock()
+    whatsapp_client.send_text.side_effect = RuntimeError("connection refused")
+    notify_owner = MagicMock()
+
+    use_case = GenerateAIResponse(
+        conversation_repo=conv_repo,
+        message_repo=msg_repo,
+        openai_client=openai_client,
+        prompt_builder=prompt_builder,
+        whatsapp_client=whatsapp_client,
+        notify_owner=notify_owner,
+    )
+    use_case.execute(phone_number="+5511999999999")
+
+    notify_owner.execute.assert_called_once_with(phone_number="+5511999999999")
+
+
+def test_notify_owner_exception_is_swallowed():
+    """If notify_owner.execute raises, the exception must not propagate out of execute()."""
+    conv = Conversation(phone_number="+5511999999999", stage=ConversationStage.PRICING)
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = conv
+    msg_repo = MagicMock()
+    msg_repo.get_recent.return_value = []
+    prompt_builder = MagicMock()
+    prompt_builder.build_system_prompt.return_value = "system"
+    prompt_builder.build_messages.return_value = []
+    openai_client = MagicMock()
+    openai_client.chat.return_value = ("Done!", {"lead_status": "qualified"})
+    whatsapp_client = MagicMock()
+    notify_owner = MagicMock()
+    notify_owner.execute.side_effect = RuntimeError("notify failed")
+
+    use_case = GenerateAIResponse(
+        conversation_repo=conv_repo,
+        message_repo=msg_repo,
+        openai_client=openai_client,
+        prompt_builder=prompt_builder,
+        whatsapp_client=whatsapp_client,
+        notify_owner=notify_owner,
+    )
+    use_case.execute(phone_number="+5511999999999")
+    notify_owner.execute.assert_called_once()
+
+
+def test_availability_exception_returns_none_context():
+    """If availability check raises, extra_context is None (no crash, flow continues)."""
+    conv = Conversation(
+        phone_number="+5511999999999",
+        stage=ConversationStage.AVAILABILITY,
+        checkin="2026-04-10",
+        checkout="2026-04-12",
+    )
+    conv_repo = MagicMock()
+    conv_repo.load.return_value = conv
+    msg_repo = MagicMock()
+    msg_repo.get_recent.return_value = []
+    prompt_builder = MagicMock()
+    prompt_builder.build_system_prompt.return_value = "system"
+    prompt_builder.build_messages.return_value = []
+    openai_client = MagicMock()
+    openai_client.chat.return_value = ("Sem dados.", {})
+    whatsapp_client = MagicMock()
+    availability_service = MagicMock()
+    availability_service.check.side_effect = Exception("calendar service down")
+
+    use_case = GenerateAIResponse(
+        conversation_repo=conv_repo,
+        message_repo=msg_repo,
+        openai_client=openai_client,
+        prompt_builder=prompt_builder,
+        whatsapp_client=whatsapp_client,
+        availability_service=availability_service,
+    )
+    use_case.execute(phone_number="+5511999999999")
+
+    whatsapp_client.send_text.assert_called_once()
+    call_kwargs = prompt_builder.build_system_prompt.call_args[1]
+    assert call_kwargs.get("extra_context") is None

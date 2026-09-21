@@ -4,16 +4,18 @@ from app.config.settings import Settings
 
 PARAM_NAMES = {
     "OPENAI_API_KEY_PARAM": "/chacara-chatbot/openai-api-key",
-    "WHATSAPP_ACCESS_TOKEN_PARAM": "/chacara-chatbot/whatsapp-access-token",
-    "WHATSAPP_PHONE_NUMBER_ID_PARAM": "/chacara-chatbot/whatsapp-phone-number-id",
+    "EVOLUTION_API_URL_PARAM": "/chacara-chatbot/evolution-api-url",
+    "EVOLUTION_API_KEY_PARAM": "/chacara-chatbot/evolution-api-key",
+    "EVOLUTION_INSTANCE_NAME_PARAM": "/chacara-chatbot/evolution-instance-name",
     "KNOWLEDGE_BASE_BUCKET_PARAM": "/chacara-chatbot/knowledge-base-bucket",
 }
 
 SSM_RESPONSE = {
     "Parameters": [
         {"Name": "/chacara-chatbot/openai-api-key", "Value": "sk-test"},
-        {"Name": "/chacara-chatbot/whatsapp-access-token", "Value": "wa-token"},
-        {"Name": "/chacara-chatbot/whatsapp-phone-number-id", "Value": "12345"},
+        {"Name": "/chacara-chatbot/evolution-api-url", "Value": "https://evolution.example.com"},
+        {"Name": "/chacara-chatbot/evolution-api-key", "Value": "evo-key"},
+        {"Name": "/chacara-chatbot/evolution-instance-name", "Value": "chacara"},
         {"Name": "/chacara-chatbot/knowledge-base-bucket", "Value": "my-bucket"},
     ],
     "InvalidParameters": [],
@@ -40,8 +42,9 @@ def test_settings_reads_from_ssm(monkeypatch):
 
     assert s.openai_api_key == "sk-test"
     assert s.openai_model == "gpt-4o"
-    assert s.whatsapp_access_token == "wa-token"
-    assert s.whatsapp_phone_number_id == "12345"
+    assert s.evolution_api_url == "https://evolution.example.com"
+    assert s.evolution_api_key == "evo-key"
+    assert s.evolution_instance_name == "chacara"
     assert s.knowledge_base_bucket == "my-bucket"
 
 
@@ -69,19 +72,47 @@ def test_loads_owner_phone_from_ssm(monkeypatch):
     assert s.owner_phone == "+5511888888888"
 
 
-
 def test_settings_raises_on_missing_parameter(monkeypatch):
     _set_param_envs(monkeypatch)
     response_missing_one = {
         "Parameters": [
             {"Name": "/chacara-chatbot/openai-api-key", "Value": "sk-test"},
-            # whatsapp-access-token intentionally missing
-            {"Name": "/chacara-chatbot/whatsapp-phone-number-id", "Value": "12345"},
+            # evolution-api-url intentionally missing
+            {"Name": "/chacara-chatbot/evolution-api-key", "Value": "evo-key"},
+            {"Name": "/chacara-chatbot/evolution-instance-name", "Value": "chacara"},
             {"Name": "/chacara-chatbot/knowledge-base-bucket", "Value": "my-bucket"},
         ],
-        "InvalidParameters": ["/chacara-chatbot/whatsapp-access-token"],
+        "InvalidParameters": ["/chacara-chatbot/evolution-api-url"],
     }
 
     with patch("app.config.settings.boto3.client", return_value=_mock_ssm(response_missing_one)):
-        with pytest.raises(ValueError, match="/chacara-chatbot/whatsapp-access-token"):
+        with pytest.raises(ValueError, match="/chacara-chatbot/evolution-api-url"):
             Settings()
+
+
+def test_get_settings_singleton_returns_same_instance(monkeypatch):
+    """_get_settings() caches the instance and returns the same object on repeated calls."""
+    import app.config.settings as settings_mod
+    _set_param_envs(monkeypatch)
+    monkeypatch.setattr(settings_mod, "_settings", None)
+
+    with patch("app.config.settings.boto3.client", return_value=_mock_ssm()):
+        s1 = settings_mod._get_settings()
+        s2 = settings_mod._get_settings()
+
+    assert s1 is s2
+    monkeypatch.setattr(settings_mod, "_settings", None)
+
+
+def test_settings_with_no_param_env_vars_skips_ssm(monkeypatch):
+    """When no *_PARAM env vars are set, Settings initialises without calling SSM."""
+    for key in PARAM_NAMES:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("OWNER_PHONE_PARAM", raising=False)
+
+    with patch("app.config.settings.boto3.client") as mock_boto:
+        s = Settings()
+
+    mock_boto.assert_not_called()
+    assert s.openai_api_key == ""
+    assert s.evolution_api_url == ""

@@ -5,8 +5,6 @@ from app.config.settings import _get_settings
 
 logger = Logger()
 
-WHATSAPP_API_URL = "https://graph.facebook.com/v19.0"
-
 _client = None
 
 
@@ -15,42 +13,23 @@ def get_whatsapp_client() -> "WhatsAppClient":
     if _client is None:
         settings = _get_settings()
         _client = WhatsAppClient(
-            access_token=settings.whatsapp_access_token,
-            phone_number_id=settings.whatsapp_phone_number_id,
+            api_url=settings.evolution_api_url,
+            api_key=settings.evolution_api_key,
+            instance_name=settings.evolution_instance_name,
         )
     return _client
 
 
 class WhatsAppClient:
-    def __init__(self, access_token: str, phone_number_id: str):
-        self._access_token = access_token
-        self._phone_number_id = phone_number_id
+    def __init__(self, api_url: str, api_key: str, instance_name: str):
+        self._api_url = api_url.rstrip("/")
+        self._api_key = api_key
+        self._instance_name = instance_name
 
     def send_text(self, to: str, text: str) -> None:
-        url = f"{WHATSAPP_API_URL}/{self._phone_number_id}/messages"
-        headers = {
-            "Authorization": f"Bearer {self._access_token}",
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to,
-            "type": "text",
-            "text": {"body": text},
-        }
+        url = f"{self._api_url}/message/sendText/{self._instance_name}"
+        headers = {"apikey": self._api_key}
+        payload = {"number": to, "text": text}
         response = httpx.post(url, json=payload, headers=headers)
         response.raise_for_status()
         logger.info("whatsapp_message_sent", to=to)
-
-    def get_media_url(self, media_id: str) -> str:
-        url = f"{WHATSAPP_API_URL}/{media_id}"
-        headers = {"Authorization": f"Bearer {self._access_token}"}
-        response = httpx.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json()["url"]
-
-    def download_media(self, media_url: str) -> bytes:
-        headers = {"Authorization": f"Bearer {self._access_token}"}
-        response = httpx.get(media_url, headers=headers)
-        response.raise_for_status()
-        return response.content

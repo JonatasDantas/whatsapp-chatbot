@@ -75,8 +75,11 @@ class GenerateAIResponse:
             message_type=MessageType.TEXT,
         )
         self._message_repo.save(assistant_message)
-        # self._whatsapp_client.send_text(to=phone_number, text=response_text)
-        logger.info("ai_response_sent", phone=phone_number)
+        try:
+            self._whatsapp_client.send_text(to=phone_number, text=response_text)
+            logger.info("ai_response_sent", phone=phone_number)
+        except Exception:
+            logger.exception("whatsapp_send_failed", phone=phone_number)
 
         if (
             conversation.lead_status == LeadStatus.QUALIFIED

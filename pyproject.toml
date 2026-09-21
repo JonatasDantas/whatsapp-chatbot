@@ -42,4 +42,5 @@ warn_unused_configs = true
 [dependency-groups]
 dev = [
     "moto[dynamodb]>=5.0.0",
+    "pytest-cov>=7.1.0",
 ]

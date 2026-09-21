@@ -15,24 +15,21 @@ def _make_post_event(body: dict) -> dict:
 
 
 def _text_message_payload(phone: str, text: str) -> dict:
-    wa_id = phone.lstrip("+")
+    number = phone.lstrip("+")
     return {
-        "object": "whatsapp_business_account",
-        "entry": [{"id": "BIZ_ID", "changes": [{"value": {
-            "messaging_product": "whatsapp",
-            "metadata": {
-                "display_phone_number": "15550000000",
-                "phone_number_id": "123",
-            },
-            "contacts": [{"profile": {"name": "Test"}, "wa_id": wa_id}],
-            "messages": [{
-                "from": wa_id,
+        "event": "messages.upsert",
+        "instance": "chacara",
+        "data": {
+            "key": {
+                "remoteJid": f"{number}@s.whatsapp.net",
+                "fromMe": False,
                 "id": "wamid.test1",
-                "timestamp": "1710280800",
-                "type": "text",
-                "text": {"body": text},
-            }],
-        }, "field": "messages"}]}],
+            },
+            "pushName": "Test",
+            "message": {"conversation": text},
+            "messageType": "conversation",
+            "messageTimestamp": 1710280800,
+        },
     }
 
 
@@ -41,14 +38,12 @@ def _make_text_webhook_payload() -> dict:
 
 
 def _reset_handler_globals():
-    handler_module._ssm = None
     handler_module._availability_service = None
     handler_module._pricing_service = None
 
 
 @pytest.fixture(autouse=False)
 def mock_repos():
-    """Reset handler globals and mock repo/client factories."""
     _reset_handler_globals()
 
     mock_conv_repo = MagicMock()
@@ -64,7 +59,6 @@ def mock_repos():
 
 
 def _patch_all_integrations():
-    """Return a list of patches for all external integrations used in POST handling."""
     return [
         patch("app.handlers.webhook_handler.get_conversation_repo"),
         patch("app.handlers.webhook_handler.get_message_repo"),
@@ -89,34 +83,6 @@ def test_post_returns_200():
         assert response["statusCode"] == 200
 
 
-def test_post_status_only_returns_200():
-    payload = {
-        "object": "whatsapp_business_account",
-        "entry": [{"id": "BIZ_ID", "changes": [{"value": {
-            "messaging_product": "whatsapp",
-            "metadata": {},
-            "statuses": [
-                {"id": "wamid.s1", "status": "delivered", "recipient_id": "123"},
-            ],
-        }, "field": "messages"}]}],
-    }
-    patches = _patch_all_integrations()
-    with patches[0], patches[1], patches[2], patches[3], patches[4], \
-         patches[5], patches[6], patches[7], patches[8], patches[9]:
-        handler = WebhookHandler()
-        response = handler.handle(_make_post_event(payload), None)
-        assert response["statusCode"] == 200
-
-
-def test_post_invalid_payload_returns_200():
-    patches = _patch_all_integrations()
-    with patches[0], patches[1], patches[2], patches[3], patches[4], \
-         patches[5], patches[6], patches[7], patches[8], patches[9]:
-        handler = WebhookHandler()
-        response = handler.handle(_make_post_event({"invalid": "payload"}), None)
-        assert response["statusCode"] == 200
-
-
 def test_post_malformed_json_returns_200():
     handler = WebhookHandler()
     event = {"httpMethod": "POST", "body": "not json"}
@@ -124,65 +90,124 @@ def test_post_malformed_json_returns_200():
     assert response["statusCode"] == 200
 
 
-def test_get_valid_token_returns_200_with_challenge():
-    with patch("app.handlers.webhook_handler._get_verify_token", return_value="my-token"):
-        handler = WebhookHandler()
-        event = {
-            "httpMethod": "GET",
-            "queryStringParameters": {
-                "hub.mode": "subscribe",
-                "hub.verify_token": "my-token",
-                "hub.challenge": "challenge_abc",
-            },
-        }
-        response = handler.handle(event, None)
-        assert response["statusCode"] == 200
-        assert response["body"] == "challenge_abc"
+def test_null_body_returns_200():
+    """API Gateway can send body=None; the handler must not crash."""
+    handler = WebhookHandler()
+    event = {"httpMethod": "POST", "body": None}
+    response = handler.handle(event, None)
+    assert response["statusCode"] == 200
 
 
-def test_get_invalid_token_returns_403():
-    with patch("app.handlers.webhook_handler._get_verify_token", return_value="my-token"):
-        handler = WebhookHandler()
-        event = {
-            "httpMethod": "GET",
-            "queryStringParameters": {
-                "hub.mode": "subscribe",
-                "hub.verify_token": "wrong-token",
-                "hub.challenge": "challenge_abc",
-            },
-        }
-        response = handler.handle(event, None)
-        assert response["statusCode"] == 403
+def test_duplicate_phone_in_batch_generates_response_only_once(mock_repos):
+    """Two parsed messages from the same phone must trigger exactly one AI response."""
+    from app.integrations.whatsapp.message_parser import ParsedMessage
 
-
-def test_get_missing_params_returns_403():
-    with patch("app.handlers.webhook_handler._get_verify_token", return_value="my-token"):
-        handler = WebhookHandler()
-        event = {
-            "httpMethod": "GET",
-            "queryStringParameters": {},
-        }
-        response = handler.handle(event, None)
-        assert response["statusCode"] == 403
-
-
-def test_verify_token_reads_from_env_var(monkeypatch):
-    """_get_verify_token uses WHATSAPP_VERIFY_TOKEN_PARAM env var for SSM path."""
-    monkeypatch.setenv("WHATSAPP_VERIFY_TOKEN_PARAM", "/custom/verify-token-path")
-    mock_ssm = MagicMock()
-    mock_ssm.get_parameter.return_value = {"Parameter": {"Value": "expected-token"}}
-
-    import app.handlers.webhook_handler as wh_mod
-    wh_mod._ssm = mock_ssm
-
-    from app.handlers.webhook_handler import _get_verify_token
-    token = _get_verify_token()
-
-    assert token == "expected-token"
-    mock_ssm.get_parameter.assert_called_once_with(
-        Name="/custom/verify-token-path", WithDecryption=True
+    parsed1 = ParsedMessage(
+        phone_number="+5511999999999",
+        contact_name="Maria",
+        message_type="text",
+        content="hi",
+        whatsapp_message_id="wamid.1",
+        timestamp="1710280800",
     )
-    wh_mod._ssm = None
+    parsed2 = ParsedMessage(
+        phone_number="+5511999999999",
+        contact_name="Maria",
+        message_type="text",
+        content="again",
+        whatsapp_message_id="wamid.2",
+        timestamp="1710280801",
+    )
+
+    with patch("app.handlers.webhook_handler.GenerateAIResponse") as MockGenerate, \
+         patch("app.handlers.webhook_handler.get_openai_client"), \
+         patch("app.handlers.webhook_handler.get_whatsapp_client"), \
+         patch("app.handlers.webhook_handler.get_whisper_client"), \
+         patch("app.handlers.webhook_handler.PromptBuilder"), \
+         patch("app.handlers.webhook_handler._get_settings"), \
+         patch("app.handlers.webhook_handler._get_availability_service"), \
+         patch("app.handlers.webhook_handler._get_pricing_service"), \
+         patch("app.handlers.webhook_handler.MessageParser") as MockParser, \
+         patch("app.handlers.webhook_handler.ProcessIncomingMessage"):
+
+        MockParser.parse.return_value = [parsed1, parsed2]
+        mock_instance = MagicMock()
+        MockGenerate.return_value = mock_instance
+
+        import json
+        handler = WebhookHandler()
+        handler.handle({"httpMethod": "POST", "body": json.dumps({})}, None)
+
+    mock_instance.execute.assert_called_once_with(phone_number="+5511999999999")
+
+
+def test_availability_and_pricing_services_are_singletons():
+    """_get_availability_service and _get_pricing_service return the same instance on repeated calls."""
+    import app.handlers.webhook_handler as wh_mod
+    wh_mod._availability_service = None
+    wh_mod._pricing_service = None
+
+    with patch("app.handlers.webhook_handler.get_calendar_repo"), \
+         patch("app.handlers.webhook_handler.AvailabilityService") as MockAvail, \
+         patch("app.handlers.webhook_handler.PricingService") as MockPricing:
+
+        MockAvail.return_value = MagicMock()
+        MockPricing.return_value = MagicMock()
+
+        a1 = wh_mod._get_availability_service()
+        a2 = wh_mod._get_availability_service()
+        p1 = wh_mod._get_pricing_service()
+        p2 = wh_mod._get_pricing_service()
+
+    assert a1 is a2
+    assert p1 is p2
+    MockAvail.assert_called_once()
+    MockPricing.assert_called_once()
+
+    wh_mod._availability_service = None
+    wh_mod._pricing_service = None
+
+
+def test_non_message_upsert_event_returns_200_without_processing():
+    payload = {
+        "event": "connection.update",
+        "instance": "chacara",
+        "data": {"state": "open"},
+    }
+    patches = _patch_all_integrations()
+    with patches[0], patches[1], patches[2], patches[3] as mock_wa, \
+         patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
+        handler = WebhookHandler()
+        response = handler.handle(_make_post_event(payload), None)
+
+        assert response["statusCode"] == 200
+        mock_wa.return_value.send_text.assert_not_called()
+
+
+def test_from_me_message_is_skipped():
+    payload = {
+        "event": "messages.upsert",
+        "instance": "chacara",
+        "data": {
+            "key": {
+                "remoteJid": "5511999999999@s.whatsapp.net",
+                "fromMe": True,
+                "id": "wamid.self",
+            },
+            "pushName": "Bot",
+            "message": {"conversation": "I replied"},
+            "messageType": "conversation",
+            "messageTimestamp": 1710280800,
+        },
+    }
+    patches = _patch_all_integrations()
+    with patches[0], patches[1], patches[2], patches[3] as mock_wa, \
+         patches[4], patches[5], patches[6], patches[7], patches[8], patches[9]:
+        handler = WebhookHandler()
+        response = handler.handle(_make_post_event(payload), None)
+
+        assert response["statusCode"] == 200
+        mock_wa.return_value.send_text.assert_not_called()
 
 
 def test_post_calls_generate_ai_response(mock_repos):

@@ -41,7 +41,7 @@ class OpenAIClient:
             messages=[{"role": "system", "content": system}] + messages,
             response_format={"type": "json_object"},
         )
-        raw = response.choices[0].message.content
+        raw = response.choices[0].message.content or ""
         try:
             parsed = json.loads(raw)
             text = parsed.get("response", raw)

@@ -1,37 +1,29 @@
+import base64
+
 from app.integrations.whatsapp.message_parser import MessageParser
 
 
-def _make_webhook_payload(
-    messages=None, contacts=None, statuses=None
-) -> dict:
-    """Build a minimal valid WhatsApp webhook payload."""
-    value = {"messaging_product": "whatsapp", "metadata": {
-        "display_phone_number": "15550000000",
-        "phone_number_id": "123456",
-    }}
-    if contacts is not None:
-        value["contacts"] = contacts
-    if messages is not None:
-        value["messages"] = messages
-    if statuses is not None:
-        value["statuses"] = statuses
+def _make_payload(phone: str, message_type: str, message: dict, from_me: bool = False, push_name: str = "Test") -> dict:
+    number = phone.lstrip("+")
     return {
-        "object": "whatsapp_business_account",
-        "entry": [{"id": "BIZ_ID", "changes": [{"value": value, "field": "messages"}]}],
+        "event": "messages.upsert",
+        "instance": "chacara",
+        "data": {
+            "key": {
+                "remoteJid": f"{number}@s.whatsapp.net",
+                "fromMe": from_me,
+                "id": "wamid.abc123",
+            },
+            "pushName": push_name,
+            "message": message,
+            "messageType": message_type,
+            "messageTimestamp": 1710280800,
+        },
     }
 
 
 def test_parse_text_message():
-    payload = _make_webhook_payload(
-        contacts=[{"profile": {"name": "Maria"}, "wa_id": "5511999999999"}],
-        messages=[{
-            "from": "5511999999999",
-            "id": "wamid.abc123",
-            "timestamp": "1710280800",
-            "type": "text",
-            "text": {"body": "Hello"},
-        }],
-    )
+    payload = _make_payload("+5511999999999", "conversation", {"conversation": "Hello"}, push_name="Maria")
     result = MessageParser.parse(payload)
     assert len(result) == 1
     msg = result[0]
@@ -39,94 +31,96 @@ def test_parse_text_message():
     assert msg.contact_name == "Maria"
     assert msg.message_type == "text"
     assert msg.content == "Hello"
-    assert msg.media_id is None
+    assert msg.audio_data is None
     assert msg.whatsapp_message_id == "wamid.abc123"
 
 
 def test_parse_audio_message():
-    payload = _make_webhook_payload(
-        contacts=[{"profile": {"name": "João"}, "wa_id": "5511888888888"}],
-        messages=[{
-            "from": "5511888888888",
-            "id": "wamid.audio1",
-            "timestamp": "1710280800",
-            "type": "audio",
-            "audio": {"id": "media_xyz", "mime_type": "audio/ogg"},
-        }],
-    )
+    audio_bytes = b"fake-audio-data"
+    b64 = base64.b64encode(audio_bytes).decode()
+    payload = _make_payload("+5511888888888", "audioMessage", {"base64": b64}, push_name="João")
     result = MessageParser.parse(payload)
     assert len(result) == 1
     msg = result[0]
     assert msg.message_type == "audio"
-    assert msg.media_id == "media_xyz"
+    assert msg.audio_data == audio_bytes
     assert msg.content == ""
 
 
-def test_parse_unsupported_message_type():
-    payload = _make_webhook_payload(
-        contacts=[{"profile": {"name": "Ana"}, "wa_id": "5511777777777"}],
-        messages=[{
-            "from": "5511777777777",
-            "id": "wamid.img1",
-            "timestamp": "1710280800",
-            "type": "image",
-            "image": {"id": "media_img"},
-        }],
-    )
+def test_parse_audio_missing_base64_returns_empty_bytes():
+    payload = _make_payload("+5511888888888", "audioMessage", {})
     result = MessageParser.parse(payload)
     assert len(result) == 1
-    msg = result[0]
-    assert msg.message_type == "unsupported"
-    assert msg.content == "[unsupported: image]"
+    assert result[0].audio_data == b""
 
 
-def test_parse_status_only_payload():
-    payload = _make_webhook_payload(
-        statuses=[{
-            "id": "wamid.s1",
-            "status": "delivered",
-            "recipient_id": "5511999999999",
-        }],
-    )
+def test_parse_audio_corrupt_base64_returns_empty_bytes():
+    """If the base64 field is present but contains invalid data, fall back to empty bytes."""
+    payload = _make_payload("+5511888888888", "audioMessage", {"base64": "!!!not-valid-base64!!!"})
     result = MessageParser.parse(payload)
-    assert len(result) == 0
+    assert len(result) == 1
+    assert result[0].audio_data == b""
+
+
+def test_parse_unsupported_message_type_is_skipped():
+    payload = _make_payload("+5511777777777", "imageMessage", {"imageMessage": {}})
+    result = MessageParser.parse(payload)
+    assert result == []
+
+
+def test_parse_non_upsert_event_returns_empty():
+    payload = {"event": "connection.update", "data": {"state": "open"}}
+    result = MessageParser.parse(payload)
+    assert result == []
+
+
+def test_parse_from_me_true_returns_empty():
+    payload = _make_payload("+5511999999999", "conversation", {"conversation": "I replied"}, from_me=True)
+    result = MessageParser.parse(payload)
+    assert result == []
+
+
+def test_parse_group_message_is_skipped():
+    payload = {
+        "event": "messages.upsert",
+        "instance": "chacara",
+        "data": {
+            "key": {"remoteJid": "123456789@g.us", "fromMe": False, "id": "wamid.grp1"},
+            "pushName": "Someone",
+            "message": {"conversation": "Hi group"},
+            "messageType": "conversation",
+            "messageTimestamp": 1710280800,
+        },
+    }
+    result = MessageParser.parse(payload)
+    assert result == []
 
 
 def test_parse_phone_number_normalization():
-    payload = _make_webhook_payload(
-        contacts=[{"profile": {"name": "Test"}, "wa_id": "5511999999999"}],
-        messages=[{
-            "from": "5511999999999",
-            "id": "wamid.norm1",
-            "timestamp": "1710280800",
-            "type": "text",
-            "text": {"body": "Hi"},
-        }],
-    )
+    payload = _make_payload("+5511999999999", "conversation", {"conversation": "Hi"})
     result = MessageParser.parse(payload)
     assert result[0].phone_number == "+5511999999999"
 
 
-def test_parse_multiple_messages():
-    payload = _make_webhook_payload(
-        contacts=[{"profile": {"name": "Maria"}, "wa_id": "5511999999999"}],
-        messages=[
-            {
-                "from": "5511999999999", "id": "wamid.m1",
-                "timestamp": "1710280800", "type": "text",
-                "text": {"body": "Hi"},
-            },
-            {
-                "from": "5511999999999", "id": "wamid.m2",
-                "timestamp": "1710280801", "type": "text",
-                "text": {"body": "Hello"},
-            },
-        ],
-    )
+def test_parse_phone_without_plus_gets_normalized():
+    number = "5511999999999"
+    payload = {
+        "event": "messages.upsert",
+        "instance": "chacara",
+        "data": {
+            "key": {"remoteJid": f"{number}@s.whatsapp.net", "fromMe": False, "id": "wamid.x"},
+            "pushName": "Test",
+            "message": {"conversation": "Hi"},
+            "messageType": "conversation",
+            "messageTimestamp": 1710280800,
+        },
+    }
     result = MessageParser.parse(payload)
-    assert len(result) == 2
+    assert result[0].phone_number == "+5511999999999"
 
 
-def test_parse_invalid_payload_returns_empty():
-    result = MessageParser.parse({"object": "something_else"})
-    assert result == []
+def test_parse_timestamp_is_string():
+    payload = _make_payload("+5511999999999", "conversation", {"conversation": "Hi"})
+    result = MessageParser.parse(payload)
+    assert isinstance(result[0].timestamp, str)
+    assert result[0].timestamp == "1710280800"

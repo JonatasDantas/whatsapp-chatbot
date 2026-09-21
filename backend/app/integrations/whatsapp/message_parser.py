@@ -1,7 +1,8 @@
+import base64
 from typing import Optional
 
 from aws_lambda_powertools import Logger
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
 logger = Logger()
 
@@ -11,130 +12,71 @@ class ParsedMessage(BaseModel):
     contact_name: str
     message_type: str  # text, audio, unsupported
     content: str
-    media_id: Optional[str] = None
+    audio_data: Optional[bytes] = None
     whatsapp_message_id: str
     timestamp: str
 
 
-class ContactProfile(BaseModel):
-    name: str
-
-
-class Contact(BaseModel):
-    profile: ContactProfile
-    wa_id: str
-
-
-class TextContent(BaseModel):
-    body: str
-
-
-class AudioContent(BaseModel):
-    id: str
-    mime_type: Optional[str] = None
-
-
-class WhatsAppMessage(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    from_: str = Field(alias="from")
-    id: str
-    timestamp: str
-    type: str
-    text: Optional[TextContent] = None
-    audio: Optional[AudioContent] = None
-
-
-class Metadata(BaseModel):
-    display_phone_number: Optional[str] = None
-    phone_number_id: Optional[str] = None
-
-
-class Value(BaseModel):
-    messaging_product: Optional[str] = None
-    metadata: Optional[Metadata] = None
-    contacts: Optional[list[Contact]] = None
-    messages: Optional[list[WhatsAppMessage]] = None
-    statuses: Optional[list[dict]] = None
-
-
-class Change(BaseModel):
-    value: Value
-    field: str
-
-
-class Entry(BaseModel):
-    id: str
-    changes: list[Change]
-
-
-class WhatsAppWebhook(BaseModel):
-    object: str
-    entry: list[Entry]
-
-
-def _normalize_phone(phone: str) -> str:
-    if not phone.startswith("+"):
-        return f"+{phone}"
-    return phone
+def _extract_phone(remote_jid: str) -> str:
+    number = remote_jid.split("@")[0]
+    return number if number.startswith("+") else f"+{number}"
 
 
 class MessageParser:
     @staticmethod
     def parse(payload: dict) -> list[ParsedMessage]:
-        try:
-            webhook = WhatsAppWebhook.model_validate(payload)
-        except Exception:
-            logger.warning("webhook_parse_failed")
+        if payload.get("event") != "messages.upsert":
+            logger.info("webhook_event_skipped", event=payload.get("event"))
             return []
 
-        if webhook.object != "whatsapp_business_account":
-            logger.warning("unexpected_webhook_object", object=webhook.object)
+        data = payload.get("data", {})
+        key = data.get("key", {})
+
+        if key.get("fromMe"):
+            logger.info("self_message_skipped")
             return []
 
-        parsed: list[ParsedMessage] = []
+        remote_jid = key.get("remoteJid", "")
+        if "@g.us" in remote_jid:
+            logger.info("group_message_skipped", jid=remote_jid)
+            return []
 
-        for entry in webhook.entry:
-            for change in entry.changes:
-                value = change.value
+        phone = _extract_phone(remote_jid)
+        contact_name = data.get("pushName") or "Unknown"
+        message_id = key.get("id", "")
+        timestamp = str(data.get("messageTimestamp", ""))
+        message_type_raw = data.get("messageType", "")
+        message = data.get("message", {})
 
-                if not value.messages:
-                    if value.statuses:
-                        logger.info("webhook_status_update_skipped", count=len(value.statuses))
-                    continue
+        if message_type_raw == "conversation":
+            content = message.get("conversation", "")
+            logger.info("message_parsed", phone=phone, message_type="text")
+            return [ParsedMessage(
+                phone_number=phone,
+                contact_name=contact_name,
+                message_type="text",
+                content=content,
+                whatsapp_message_id=message_id,
+                timestamp=timestamp,
+            )]
 
-                contacts_map: dict[str, str] = {}
-                if value.contacts:
-                    for contact in value.contacts:
-                        contacts_map[contact.wa_id] = contact.profile.name
+        if message_type_raw == "audioMessage":
+            raw_b64 = message.get("base64", "")
+            try:
+                audio_bytes = base64.b64decode(raw_b64) if raw_b64 else b""
+            except Exception:
+                logger.warning("audio_base64_decode_failed", phone=phone)
+                audio_bytes = b""
+            logger.info("message_parsed", phone=phone, message_type="audio")
+            return [ParsedMessage(
+                phone_number=phone,
+                contact_name=contact_name,
+                message_type="audio",
+                content="",
+                audio_data=audio_bytes,
+                whatsapp_message_id=message_id,
+                timestamp=timestamp,
+            )]
 
-                for msg in value.messages:
-                    phone = _normalize_phone(msg.from_)
-                    contact_name = contacts_map.get(msg.from_, "Unknown")
-
-                    if msg.type == "text" and msg.text:
-                        content = msg.text.body
-                        media_id = None
-                        message_type = "text"
-                    elif msg.type == "audio" and msg.audio:
-                        content = ""
-                        media_id = msg.audio.id
-                        message_type = "audio"
-                    else:
-                        content = f"[unsupported: {msg.type}]"
-                        media_id = None
-                        message_type = "unsupported"
-                        logger.warning("unsupported_message_type", type=msg.type, phone=phone)
-
-                    logger.info("message_parsed", phone=phone, message_type=message_type)
-                    parsed.append(ParsedMessage(
-                        phone_number=phone,
-                        contact_name=contact_name,
-                        message_type=message_type,
-                        content=content,
-                        media_id=media_id,
-                        whatsapp_message_id=msg.id,
-                        timestamp=msg.timestamp,
-                    ))
-
-        return parsed
+        logger.warning("unsupported_message_type", type=message_type_raw, phone=phone)
+        return []

@@ -56,11 +56,10 @@ class ProcessIncomingMessage:
         content = parsed.content
         if (
             parsed.message_type == MessageType.AUDIO
-            and parsed.media_id
-            and self._whatsapp_client
+            and parsed.audio_data
             and self._whisper_client
         ):
-            content = self._transcribe_audio(parsed.media_id)
+            content = self._transcribe_audio(parsed.audio_data)
 
         message = Message(
             phone_number=parsed.phone_number,
@@ -68,7 +67,6 @@ class ProcessIncomingMessage:
             role=MessageRole.USER,
             message=content,
             message_type=MessageType(parsed.message_type),
-            media_id=parsed.media_id,
         )
         self._message_repo.save(message)
 
@@ -81,10 +79,8 @@ class ProcessIncomingMessage:
         conversation.touch()
         self._conversation_repo.save(conversation)
 
-    def _transcribe_audio(self, media_id: str) -> str:
-        logger.info("audio_transcription_started", media_id=media_id)
-        media_url = self._whatsapp_client.get_media_url(media_id)
-        audio_data = self._whatsapp_client.download_media(media_url)
+    def _transcribe_audio(self, audio_data: bytes) -> str:
+        logger.info("audio_transcription_started")
         transcript = self._whisper_client.transcribe(audio_data=audio_data)
-        logger.info("audio_transcription_completed", media_id=media_id)
+        logger.info("audio_transcription_completed")
         return transcript
