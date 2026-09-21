@@ -6,6 +6,7 @@ from boto3.dynamodb.conditions import Key
 
 from app.domain.models.message import Message
 from app.domain.repositories.message_repository import MessageRepository
+from app.utils.dynamodb import to_dynamodb_item
 
 _dynamodb = None
 _table = None
@@ -33,7 +34,7 @@ class DynamoDBMessageRepository(MessageRepository):
         self._table = table
 
     def save(self, message: Message) -> None:
-        item = message.model_dump(mode="json")
+        item = to_dynamodb_item(message.model_dump(mode="json"))
         self._table.put_item(Item=item)
 
     def get_recent(self, phone_number: str, limit: int = 10) -> list[Message]:
@@ -41,6 +42,14 @@ class DynamoDBMessageRepository(MessageRepository):
             KeyConditionExpression=Key("phone_number").eq(phone_number),
             ScanIndexForward=False,
             Limit=limit,
+        )
+        items = response.get("Items", [])
+        return [Message.model_validate(item) for item in items]
+
+    def get_all(self, phone_number: str) -> list[Message]:
+        response = self._table.query(
+            KeyConditionExpression=Key("phone_number").eq(phone_number),
+            ScanIndexForward=True,
         )
         items = response.get("Items", [])
         return [Message.model_validate(item) for item in items]

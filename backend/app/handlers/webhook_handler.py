@@ -1,8 +1,11 @@
 import json
+import os
 
 import boto3
 from aws_lambda_powertools import Logger
 
+from app.config.settings import _get_settings
+from app.integrations.dynamodb.calendar_repo import get_calendar_repo
 from app.integrations.dynamodb.conversation_repo import get_conversation_repo
 from app.integrations.dynamodb.message_repo import get_message_repo
 from app.integrations.llm.openai_client import get_openai_client
@@ -10,8 +13,29 @@ from app.integrations.llm.prompt_builder import PromptBuilder
 from app.integrations.speech.whisper_client import get_whisper_client
 from app.integrations.whatsapp.message_parser import MessageParser
 from app.integrations.whatsapp.whatsapp_client import get_whatsapp_client
+from app.services.availability_service import AvailabilityService
+from app.services.pricing_service import PricingService
 from app.use_cases.generate_ai_response import GenerateAIResponse
+from app.use_cases.notify_owner import NotifyOwner
 from app.use_cases.process_incoming_message import ProcessIncomingMessage
+
+_availability_service = None
+_pricing_service = None
+
+
+def _get_availability_service() -> AvailabilityService:
+    global _availability_service
+    if _availability_service is None:
+        _availability_service = AvailabilityService(calendar_repo=get_calendar_repo())
+    return _availability_service
+
+
+def _get_pricing_service() -> PricingService:
+    global _pricing_service
+    if _pricing_service is None:
+        nightly_rate = float(os.environ.get("NIGHTLY_RATE", "800.0"))
+        _pricing_service = PricingService(nightly_rate=nightly_rate)
+    return _pricing_service
 
 logger = Logger()
 
@@ -26,9 +50,8 @@ def _get_ssm():
 
 
 def _get_verify_token() -> str:
-    param = _get_ssm().get_parameter(
-        Name="/chacara-chatbot/whatsapp/verify-token", WithDecryption=True
-    )
+    param_name = os.environ.get("WHATSAPP_VERIFY_TOKEN_PARAM", "/chacara-chatbot/whatsapp-verify-token")
+    param = _get_ssm().get_parameter(Name=param_name, WithDecryption=True)
     return param["Parameter"]["Value"]
 
 
@@ -69,12 +92,22 @@ class WebhookHandler:
         )
         process_use_case.execute(parsed_messages)
 
+        settings = _get_settings()
+        notify_owner_use_case = NotifyOwner(
+            conversation_repo=get_conversation_repo(),
+            whatsapp_client=get_whatsapp_client(),
+            owner_phone=settings.owner_phone,
+        )
+
         generate_use_case = GenerateAIResponse(
             conversation_repo=get_conversation_repo(),
             message_repo=get_message_repo(),
             openai_client=get_openai_client(),
             prompt_builder=PromptBuilder(),
             whatsapp_client=get_whatsapp_client(),
+            pricing_service=_get_pricing_service(),
+            availability_service=_get_availability_service(),
+            notify_owner=notify_owner_use_case,
         )
 
         seen_phones = set()

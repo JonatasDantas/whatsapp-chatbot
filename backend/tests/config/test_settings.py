@@ -55,6 +55,21 @@ def test_settings_default_model(monkeypatch):
     assert s.openai_model == "gpt-4o-mini"
 
 
+def test_loads_owner_phone_from_ssm(monkeypatch):
+    _set_param_envs(monkeypatch)
+    monkeypatch.setenv("OWNER_PHONE_PARAM", "/chacara/owner-phone")
+    full_response = {
+        "Parameters": SSM_RESPONSE["Parameters"] + [
+            {"Name": "/chacara/owner-phone", "Value": "+5511888888888"}
+        ],
+        "InvalidParameters": [],
+    }
+    with patch("app.config.settings.boto3.client", return_value=_mock_ssm(full_response)):
+        s = Settings()
+    assert s.owner_phone == "+5511888888888"
+
+
+
 def test_settings_raises_on_missing_parameter(monkeypatch):
     _set_param_envs(monkeypatch)
     response_missing_one = {

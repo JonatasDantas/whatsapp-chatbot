@@ -12,3 +12,10 @@ cdk.out
 # Environment
 .env
 .worktrees/
+
+# Lambda vendored dependencies
+backend/_vendor/
+
+*/*node_modules
+frontend/out
+frontend/.next
